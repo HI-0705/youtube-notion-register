@@ -1,9 +1,15 @@
 import uuid
+import re
 from datetime import date, datetime, timedelta
 from typing import List, Literal, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
+from youtube_transcript_api import YouTubeTranscriptApi
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from .core.config import YOUTUBE_API_KEY
 
 
 # ヘルスチェック用
@@ -108,16 +114,67 @@ def health_check():
 @app.post("/api/v1/collect", response_model=CollectResponse, tags=["Video Processing"])
 def collect_video_data(request: CollectRequest):
     """
-    YouTube動画のURLを受け取り、データ収集を開始するエンドポイント（モック）。
-    ダミーのセッションIDと動画情報を返す。
+    YouTube動画のURLを受け取り、字幕データ収集するエンドポイント
     """
-    # 本来は、ここでYouTube APIを呼び出して動画情報を取得する
-    seesion_id = str(uuid.uuid4())  # ランダムなセッションIDを生成
-    dummy_data = CollectResponseData(
-        video_id="dQw4w9WgXcQ", title="Video Title", channel_name="Sample Channel"
+    # APIキーの存在確認
+    if not YOUTUBE_API_KEY:
+        raise HTTPException(
+            status_code=500, detail="YouTube API key is not configured."
+        )
+
+    # 動画IDを正規表現で抽出
+    video_id_match = re.search(r"(?:<?v=)[\w-]+", str(request.url))
+    if not video_id_match:
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+
+    video_id = video_id_match.group(0)
+
+    try:
+        # 動画情報を取得
+        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+        video_response = (
+            youtube.videos().list(part="snippet,contentDetails", id=video_id).execute()
+        )
+        if not video_response["items"]:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        snippet = video_response["items"][0]["snippet"]
+        video_title = snippet["title"]
+        channel_name = snippet["channelTitle"]
+
+        print(f"Successfully fetched video info for video: {video_title}")
+
+    except HttpError as e:
+        print(f"An HTTP error{e.resp.status} occurred: {e.content}")
+        raise HTTPException(
+            status_code=e.resp.status,
+            detail="Failed to fetch video metadata: {e.content}",
+        )
+
+    try:
+        # 字幕データを取得
+        transcript_list = YouTubeTranscriptApi.get_transcript(
+            video_id, languages=["ja", "en"]
+        )
+        transcript_text = " ".join([item["text"] for item in transcript_list])
+
+        print(f"Successfully fetched transcript for video_id: {video_id}")
+
+    except Exception as e:
+        print(f"Could not fetch transcript for video_id: {video_id}. Error: {e}")
+        raise HTTPException(
+            status_code=404, detail=f"Transcript not found. Error: {str(e)}"
+        )
+
+    seesion_id = str(uuid.uuid4())
+
+    response_data = CollectResponseData(
+        video_id=video_id, title=video_title, channel_name=channel_name
     )
 
-    return CollectResponse(status="success", session_id=seesion_id, data=dummy_data)
+    print(f"Transcript length: {len(transcript_text)} ")
+
+    return CollectResponse(status="success", session_id=seesion_id, data=response_data)
 
 
 @app.post("/api/v1/analyze", response_model=AnalyzeResponse, tags=["Video Processing"])
