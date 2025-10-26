@@ -2,16 +2,24 @@ import uuid
 import aiofiles
 import os
 import re
+import json
 from datetime import date, datetime, timedelta
 from typing import List, Literal, Optional
 
+import openai
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from youtube_transcript_api import YouTubeTranscriptApi
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .core.config import DATA_DIR, YOUTUBE_API_KEY, parse_duration
+from .core.config import (
+    DATA_DIR,
+    YOUTUBE_API_KEY,
+    OPENAI_API_KEY,
+    MODEL,
+    parse_duration,
+)
 
 
 # ヘルスチェック用
@@ -48,6 +56,13 @@ class AnalyzeResponse(BaseModel):
     suggested_titles: str  # 推奨タイトル
     categories: List[str]  # カテゴリ一覧
     emotions: str  # 感情
+
+
+class AnalysisResult(BaseModel):
+    summary: str
+    suggested_titles: str
+    categories: List[str]
+    emotions: str
 
 
 # 登録用
@@ -88,8 +103,9 @@ class SessionInfo(BaseModel):
     video_data: VideoMetadata  # 動画メタデータ
     transcript: str  # 字幕テキスト
     transcript_language: str  # 字幕言語
-    status: Literal["collected", "analyzed", "registered", "error"]  # 処理ステータス
-    created_by: str  # 作成者情報（IPアドレスなど）
+    status: Literal["collected", "analyzed", "registered", "error"]  # 処理状態
+    created_by: str  # 作成者情報
+    analysis_result: Optional[AnalysisResult] = None  # 分析結果
 
 
 class SessionResponse(BaseModel):
@@ -227,18 +243,107 @@ async def collect_video_data(request: CollectRequest):
 
 
 @app.post("/api/v1/analyze", response_model=AnalyzeResponse, tags=["Video Processing"])
-def analyze_transcript(request: AnalyzeRequest):
+async def analyze_transcript(request: AnalyzeRequest):
     """
-    セッションIDを受け取り、動画の分析・要約を行うエンドポイント（モック）。
-    ダミーの要約結果を返す。
+    セッションIDを受け取り、動画の分析・要約を行うエンドポイント
     """
-    print(f"Analyzing transcript for session_id: {request.session_id}")
+    # セッションファイルのパスを構築
+    session_file_path = os.path.join(DATA_DIR, f"{request.session_id}.json")
+
+    if not os.path.exists(session_file_path):
+        raise HTTPException(
+            status_code=404, detail="Session ID '{request.session_id}' not found."
+        )
+
+    # セッションファイルを読み込み
+    try:
+        async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
+            content = await f.read()
+            session_info = SessionInfo.model_validate_json(content)
+
+        print(f"Successfully loaded session data for session_id: {request.session_id}")
+
+    except Exception as e:
+        print(f"Failed to load session data: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load session data.")
+
+    print(f"Transcript length for analysis: {len(session_info.transcript)}")
+
+    # 動画字幕の分析・要約処理
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenAI API key is not configured.")
+
+    client = openai.Client(api_key=OPENAI_API_KEY)
+
+    prompt = f"""
+    以下のYouTube動画の字幕テキストを分析し、内容を要約してJSON形式で回答してください：
+
+    制約：
+    - 要約は300-500文字、Markdown形式
+    - タイトルは30文字以内
+    - 分類タグは最大3つ
+    - 感情タグは1つのみ
+
+    分類タグ選択肢: ["音楽", "動物", "スポーツ", "旅行", "ゲーム", "コメディ", "エンターテインメント", "教育", "科学", "映画", "アニメ", "クラシック", "ドキュメンタリー", "ドラマ", "ショートムービー", "その他"]
+    感情タグ選択肢: ["感動", "愉快", "驚愕", "啓発", "考察", "癒着", "その他"]
+
+    字幕テキスト:
+    {session_info.transcript}
+
+    回答は必ずJSON形式で、以下のキーを持つオブジェクトとしてください:
+    {{
+    "summary": "Markdown形式の要約",
+    "suggested_titles": "提案タイトル",
+    "categories": ["タグ1", "タグ2"],
+    "emotions": "感情タグ"
+    }}
+    """
+
+    try:
+        print("Sending request to OpenAI API for analysis...")
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that analyzes video transcripts and responds in JSON format.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.5,
+        )
+        analysis_content = response.choices[0].message.content
+        analysis_result = AnalysisResult.model_validate_json(analysis_content)
+        print("Analysis completed successfully.")
+
+    except openai.APIError as e:
+        print(f"OpenAI API error: {e}")
+        raise HTTPException(status_code=502, detail=f"OpenAI API error: {e}")
+
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"Failed to parse OpenAI response: {e}")
+        raise HTTPException(status_code=500, detail="Failed to parse analysis result.")
+
+    # セッション情報を更新して保存
+    session_info.status = "analyzed"
+    session_info.analysis_result = analysis_result
+
+    try:
+        async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
+            await f.write(session_info.model_dump_json(indent=4))
+            print(f"Updated session data saved to {session_file_path}")
+
+    except Exception as e:
+        print(f"Failed to update session file: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update session data.")
+
     return AnalyzeResponse(
         status="success",
-        summary="これは動画の要約内容のサンプルです。Markdown形式で記述され、300〜500文字程度の長さになる。",
-        suggested_titles="サンプル動画タイトル",
-        categories=["教育", "テクノロジー"],
-        emotions="発見",
+        summary=analysis_result.summary,
+        suggested_titles=analysis_result.suggested_titles,
+        categories=analysis_result.categories,
+        emotions=analysis_result.emotions,
     )
 
 
