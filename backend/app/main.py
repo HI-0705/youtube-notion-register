@@ -1,4 +1,6 @@
 import uuid
+import aiofiles
+import os
 import re
 from datetime import date, datetime, timedelta
 from typing import List, Literal, Optional
@@ -9,7 +11,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .core.config import YOUTUBE_API_KEY
+from .core.config import DATA_DIR, YOUTUBE_API_KEY, parse_duration
 
 
 # ヘルスチェック用
@@ -112,7 +114,7 @@ def health_check():
 
 
 @app.post("/api/v1/collect", response_model=CollectResponse, tags=["Video Processing"])
-def collect_video_data(request: CollectRequest):
+async def collect_video_data(request: CollectRequest):
     """
     YouTube動画のURLを受け取り、字幕データ収集するエンドポイント
     """
@@ -122,33 +124,56 @@ def collect_video_data(request: CollectRequest):
             status_code=500, detail="YouTube API key is not configured."
         )
 
+    # データディレクトリがない場合は作成
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+
     # 動画IDを正規表現で抽出
     video_id_match = re.search(r"(?:<?v=)[\w-]+", str(request.url))
     if not video_id_match:
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
 
-    video_id = video_id_match.group(0)
+    video_id = video_id_match.group(1)
 
     try:
         # 動画情報を取得
         youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
         video_response = (
-            youtube.videos().list(part="snippet,contentDetails", id=video_id).execute()
+            youtube.videos()
+            .list(part="snippet,contentDetails,statistics", id=video_id)
+            .execute()
         )
         if not video_response["items"]:
             raise HTTPException(status_code=404, detail="Video not found")
 
-        snippet = video_response["items"][0]["snippet"]
-        video_title = snippet["title"]
-        channel_name = snippet["channelTitle"]
+        item = video_response["items"][0]
+        snippet = item["snippet"]
+        content_details = item["contentDetails"]
+        statistics = item.get("statistics", {})
 
-        print(f"Successfully fetched video info for video: {video_title}")
+        # VideoMetadataモデルの作成
+        video_metadata = VideoMetadata(
+            video_id=video_id,
+            title=snippet["title"],
+            channel_name=snippet["channelTitle"],
+            published_at=datetime.fromisoformat(
+                snippet["publishedAt"].replace("Z", "+00:00")
+            ).date(),
+            duration=content_details["duration"],
+            duration_seconds=parse_duration(
+                content_details["duration"]
+            ),  # 変更点を反映
+            view_count=int(statistics.get("viewCount", 0)),
+            url=f"https://www.youtube.com/watch?v={video_id}",
+            thumbnail_url=snippet["thumbnails"]["high"]["url"],
+        )
+        print(f"Successfully fetched video info for video: {video_metadata.title}")
 
     except HttpError as e:
-        print(f"An HTTP error{e.resp.status} occurred: {e.content}")
+        print(f"An HTTP error {e.resp.status} occurred: {e.content}")
         raise HTTPException(
             status_code=e.resp.status,
-            detail="Failed to fetch video metadata: {e.content}",
+            detail=f"Failed to fetch video metadata: {e.content}",
         )
 
     try:
@@ -159,6 +184,7 @@ def collect_video_data(request: CollectRequest):
         transcript_text = " ".join([item["text"] for item in transcript_list])
 
         print(f"Successfully fetched transcript for video_id: {video_id}")
+        print(f"Transcript length: {len(transcript_text)}")
 
     except Exception as e:
         print(f"Could not fetch transcript for video_id: {video_id}. Error: {e}")
@@ -167,9 +193,32 @@ def collect_video_data(request: CollectRequest):
         )
 
     seesion_id = str(uuid.uuid4())
+    now = datetime.now()
+    session_info = SessionInfo(
+        session_id=seesion_id,
+        timestamp=now,
+        expires_at=now + timedelta(days=1),
+        video_data=video_metadata,
+        transcript=transcript_text,
+        transcript_language="ja",
+        status="collected",
+        created_by="system",
+    )
 
+    session_file_path = os.path.join(DATA_DIR, f"{seesion_id}.json")
+    try:
+        async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
+            await f.write(session_info.model_dump_json(indent=4))
+        print(f"Session data saved to {session_file_path}")
+    except Exception as e:
+        print(f"Failed to save session file: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save session data.")
+
+    # レスポンスデータを作成
     response_data = CollectResponseData(
-        video_id=video_id, title=video_title, channel_name=channel_name
+        video_id=video_id,
+        title=video_metadata.title,
+        channel_name=video_metadata.channel_name,
     )
 
     print(f"Transcript length: {len(transcript_text)} ")

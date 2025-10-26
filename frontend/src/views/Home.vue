@@ -5,7 +5,7 @@
 
     <div class="input-area">
       <input type="text" v-model="youtubeUrl" placeholder="https://www.youtube.com/watch?v=..." />
-      <button @click="startCollection">1. 収集・字幕取得 (Collect)</button>
+      <button @click="startCollection"> 収集・字幕取得 (Collect)</button>
     </div>
   </div>
 </template>
