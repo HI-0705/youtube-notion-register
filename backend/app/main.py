@@ -32,7 +32,7 @@ class HealthCheckResponse(BaseModel):
 # データ収集用
 class CollectRequest(BaseModel):
     url: HttpUrl  # URL形式フィールド
-    channel_id: str  # チャンネルID
+    channel_id: Optional[str] = None  # チャンネルID
 
 
 class CollectResponseData(BaseModel):
