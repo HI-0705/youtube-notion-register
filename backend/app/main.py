@@ -7,11 +7,12 @@ from typing import List, Literal, Optional
 import google.generativeai as genai
 from google.generativeai.types import GenerationConfig
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from youtube_transcript_api import YouTubeTranscriptApi
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from notion_client import Client, AsyncClient
+from notion_client import AsyncClient
 
 from .core.config import (
     DATA_DIR,
@@ -122,6 +123,19 @@ app = FastAPI(
     version="0.1.0",
 )
 
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/api/v1/health", response_model=HealthCheckResponse, tags=["Health Check"])
 def health_check():
@@ -147,11 +161,21 @@ async def collect_video_data(request: CollectRequest):
         os.makedirs(DATA_DIR)
 
     # 動画IDを正規表現で抽出
-    video_id_match = re.search(r"(?:<?v=)[\w-]+", str(request.url))
-    if not video_id_match:
-        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+    def _extract_video_id(url: str) -> Optional[str]:
+        patterns = [
+            r"v=([A-Za-z0-9_-]{11})",
+            r"youtu\.be/([A-Za-z0-9_-]{11})",
+            r"embed/([A-Za-z0-9_-]{11})",
+        ]
+        for p in patterns:
+            m = re.search(p, url)
+            if m:
+                return m.group(1)
+        return None
 
-    video_id = video_id_match.group(1)
+    video_id = _extract_video_id(str(request.url))
+    if not video_id:
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
 
     try:
         # 動画情報を取得
@@ -178,9 +202,7 @@ async def collect_video_data(request: CollectRequest):
                 snippet["publishedAt"].replace("Z", "+00:00")
             ).date(),
             duration=content_details["duration"],
-            duration_seconds=parse_duration(
-                content_details["duration"]
-            ),  # 変更点を反映
+            duration_seconds=parse_duration(content_details["duration"]),
             view_count=int(statistics.get("viewCount", 0)),
             url=f"https://www.youtube.com/watch?v={video_id}",
             thumbnail_url=snippet["thumbnails"]["high"]["url"],
@@ -196,10 +218,8 @@ async def collect_video_data(request: CollectRequest):
 
     try:
         # 字幕データを取得
-        transcript_list = YouTubeTranscriptApi.get_transcript(
-            video_id, languages=["ja", "en"]
-        )
-        transcript_text = " ".join([item["text"] for item in transcript_list])
+        fetched = YouTubeTranscriptApi().fetch(video_id, languages=["ja", "en"])
+        transcript_text = " ".join([snippet.text for snippet in fetched])
 
         print(f"Successfully fetched transcript for video_id: {video_id}")
         print(f"Transcript length: {len(transcript_text)}")
@@ -377,7 +397,7 @@ async def register_to_notion(request: RegisterRequest):
         new_page = await notion.pages.create(
             parent={"database_id": NOTION_DATABASE_ID},
             properties={
-                "タイトル": {"title": [{"text": {"content": modifications.title}}]},
+                "Name": {"title": [{"text": {"content": modifications.title}}]},
                 "分類": {
                     "multi_select": [
                         {"name": name} for name in modifications.categories

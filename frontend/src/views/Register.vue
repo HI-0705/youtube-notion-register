@@ -100,12 +100,16 @@ const registerToNotion = async () => {
       },
     })
 
-    if (response.status === 'success' && response.data?.notion_url) {
-      notionUrl.value = response.data.notion_url
+    const payload = response.data ?? response
+    const notionUrlFromPayload =
+      payload.data?.notion_url ?? payload.notion_url ?? payload.data?.notionUrl ?? payload.notionUrl
+
+    if (payload.status === 'success' && notionUrlFromPayload) {
+      notionUrl.value = notionUrlFromPayload
       mainStore.clearSessionId()
       mainStore.setAnalysisResult({ summary: '', suggested_titles: '', categories: [], emotions: '' })
     } else {
-      throw new Error(response.message || '登録に失敗しました。')
+      throw new Error(payload.message || payload.detail || '登録に失敗しました。')
     }
   } catch (err: any) {
     console.error('登録エラー:', err)

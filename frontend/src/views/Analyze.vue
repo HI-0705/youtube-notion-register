@@ -76,12 +76,22 @@ onMounted(async () => {
   try {
     console.log(`分析を開始します。セッションID: ${sessionId}`)
     const response = await api.analyzeTranscript({ session_id: sessionId })
+    const payload = response.data ?? response
 
-    if (response.status === 'success' && response.data) {
-      analysisResult.value = response.data
-      console.log('分析結果:', response.data)
+    if ((payload.status && payload.status === 'success' && payload.data) || payload.summary) {
+      if (payload.data) {
+        analysisResult.value = payload.data
+      } else {
+        analysisResult.value = {
+          summary: payload.summary,
+          suggested_titles: payload.suggested_titles,
+          categories: payload.categories ?? [],
+          emotions: payload.emotions ?? '',
+        }
+      }
+      console.log('分析結果:', analysisResult.value)
     } else {
-      throw new Error(response.message || '分析に失敗しました。')
+      throw new Error((payload && (payload.message || payload.detail)) || '分析に失敗しました。')
     }
   } catch (err: any) {
     console.error('分析エラー:', err)
