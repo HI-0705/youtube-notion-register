@@ -11,11 +11,14 @@ from pydantic import BaseModel, HttpUrl
 from youtube_transcript_api import YouTubeTranscriptApi
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from notion_client import Client, AsyncClient
 
 from .core.config import (
     DATA_DIR,
     YOUTUBE_API_KEY,
     GEMINI_API_KEY,
+    NOTION_API_KEY,
+    NOTION_DATABASE_ID,
     MODEL,
     parse_duration,
 )
@@ -343,18 +346,95 @@ async def analyze_transcript(request: AnalyzeRequest):
 @app.post(
     "/api/v1/register", response_model=RegisterResponse, tags=["Video Processing"]
 )
-def register_to_notion(request: RegisterRequest):
+async def register_to_notion(request: RegisterRequest):
     """
-    最終的な内容を受け取り、Notionに登録するエンドポイント（モック）。
-    ダミーのNotionページURLを返す。
+    最終的な内容を受け取り、Notionに登録するエンドポイント。
     """
-    print(f"Registering to Notion for session_id: {request.session_id}")
-    print(f"Modifications: {request.modifications}")
+    session_file_path = os.path.join(DATA_DIR, f"{request.session_id}.json")
+    if not os.path.exists(session_file_path):
+        raise HTTPException(
+            status_code=404, detail=f"Session ID '{request.session_id}' not found."
+        )
+    try:
+        async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
+            content = await f.read()
+            session_info = SessionInfo.model_validate_json(content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load session data: {str(e)}"
+        )
 
-    return RegisterResponse(
-        status="success",
-        notion_url="https://www.notion.so/your-notion-page-url",
-    )
+    if not NOTION_API_KEY or not NOTION_DATABASE_ID:
+        raise HTTPException(
+            status_code=500, detail="Notion API key or Database ID is not configured."
+        )
+
+    notion = AsyncClient(auth=NOTION_API_KEY)
+    modifications = request.modifications
+    video_data = session_info.video_data
+
+    try:
+        new_page = await notion.pages.create(
+            parent={"database_id": NOTION_DATABASE_ID},
+            properties={
+                "タイトル": {"title": [{"text": {"content": modifications.title}}]},
+                "分類": {
+                    "multi_select": [
+                        {"name": name} for name in modifications.categories
+                    ]
+                },
+                "感情": {"select": {"name": modifications.emotions}},
+                "動画URL": {"url": str(video_data.url)},
+                "チャンネル名": {
+                    "rich_text": [{"text": {"content": video_data.channel_name}}]
+                },
+                "公開日": {"date": {"start": video_data.published_at.isoformat()}},
+                "動画時間": {"number": video_data.duration_seconds},
+                "視聴回数": {"number": video_data.view_count},
+            },
+            children=[
+                {
+                    "object": "block",
+                    "type": "heading_2",
+                    "heading_2": {"rich_text": [{"text": {"content": "📋 要約"}}]},
+                },
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"text": {"content": modifications.summary}}]
+                    },
+                },
+                {
+                    "object": "block",
+                    "type": "divider",
+                    "divider": {},
+                },
+                {
+                    "object": "block",
+                    "type": "heading_3",
+                    "heading_3": {"rich_text": [{"text": {"content": "🔗 元動画"}}]},
+                },
+                {
+                    "object": "block",
+                    "type": "bookmark",
+                    "bookmark": {"url": str(video_data.url)},
+                },
+            ],
+        )
+
+        session_info.status = "registered"
+
+        async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
+            await f.write(session_info.model_dump_json(indent=4))
+
+        return RegisterResponse(
+            status="success",
+            notion_url=new_page["url"],
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Notion API error: {str(e)}")
 
 
 @app.get(
@@ -362,36 +442,30 @@ def register_to_notion(request: RegisterRequest):
     response_model=SessionResponse,
     tags=["Session Management"],
 )
-def get_session_status(session_id: str):
+async def get_session_status(session_id: str):
     """
-    指定されたセッションIDの状態と関連データを取得するエンドポイント（モック）。
-    ダミーのセッション情報を返す。
+    指定されたセッションIDの状態と関連データを取得するエンドポイント。
     """
-    print(f"Fetching session info for session_id: {session_id}")
+    session_file_path = os.path.join(DATA_DIR, f"{session_id}.json")
 
-    # ダミーのメタデータを作成
-    dummy_video_data = VideoMetadata(
-        video_id="dQw4w9WgXcQ",
-        title="Sample Video Title",
-        channel_name="Sample Channel",
-        published_at=date(2025, 1, 1),
-        duration="PT5M30S",
-        duration_seconds=330,
-        view_count=1000000,
-        url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        thumbnail_url="https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
-    )
+    if not os.path.exists(session_file_path):
+        raise HTTPException(
+            status_code=404, detail=f"Session ID '{session_id}' not found."
+        )
 
-    # ダミーのセッション情報を作成
-    now = datetime.now()
-    dummy_session_info = SessionInfo(
-        session_id=session_id,  # セッションID
-        timestamp=now,  # 現在の日時
-        expires_at=now + timedelta(days=1),  # 1日後に期限切れ
-        video_data=dummy_video_data,  # ダミーの動画メタデータ
-        transcript="これは動画の字幕テキストのサンプルです。",
-        transcript_language="ja",  # 日本語
-        status="analyzed",  # 処理ステータス
-        created_by="system",  # 作成者情報
-    )
-    return SessionResponse(status="success", data=dummy_session_info)
+    try:
+        async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
+            content = await f.read()
+            session_info = SessionInfo.model_validate_json(content)
+
+        if session_info.expires_at < datetime.now():
+            raise HTTPException(status_code=410, detail="Session has expired.")
+
+        return SessionResponse(status="success", data=session_info)
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load session data: {str(e)}"
+        )

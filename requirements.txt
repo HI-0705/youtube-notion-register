@@ -8,3 +8,4 @@ pydantic>=2.5.0
 slowapi>=0.1.9
 aiofiles>=23.2.1
 python-multipart>=0.0.6
+notion-client>=2.0.0

@@ -4,6 +4,8 @@ import re
 # 環境変数からAPI_KEYの値を取得
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+NOTION_API_KEY = os.getenv("NOTION_API_KEY")
+NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
 # 使用するモデルの指定
 MODEL = "gemini-1.5-flash"
