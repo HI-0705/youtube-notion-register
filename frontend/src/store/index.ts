@@ -1,18 +1,26 @@
-import { defineStore } from 'pinia'
+import { defineStore } from "pinia";
 
-// ストア定義
-export const useMainStore = defineStore('main', {
+interface AnalysisResult {
+  summary: string;
+  suggested_titles: string;
+  categories: string[];
+  emotions: string;
+}
+
+export const useMainStore = defineStore("main", {
   state: () => ({
     sessionId: null as string | null,
+    analysisResult: null as AnalysisResult | null,
   }),
   actions: {
-    // set
     setSessionId(id: string) {
-      this.sessionId = id
+      this.sessionId = id;
     },
-    // clear
     clearSessionId() {
-      this.sessionId = null
+      this.sessionId = null;
+    },
+    setAnalysisResult(result: AnalysisResult) {
+      this.analysisResult = result;
     },
   },
-})
+});
