@@ -2,11 +2,10 @@ import uuid
 import aiofiles
 import os
 import re
-import json
 from datetime import date, datetime, timedelta
 from typing import List, Literal, Optional
-
-import openai
+import google.generativeai as genai
+from google.generativeai.types import GenerationConfig
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -16,7 +15,7 @@ from googleapiclient.errors import HttpError
 from .core.config import (
     DATA_DIR,
     YOUTUBE_API_KEY,
-    OPENAI_API_KEY,
+    GEMINI_API_KEY,
     MODEL,
     parse_duration,
 )
@@ -270,10 +269,10 @@ async def analyze_transcript(request: AnalyzeRequest):
     print(f"Transcript length for analysis: {len(session_info.transcript)}")
 
     # 動画字幕の分析・要約処理
-    if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OpenAI API key is not configured.")
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Gemini API key is not configured.")
 
-    client = openai.Client(api_key=OPENAI_API_KEY)
+    genai.configure(api_key=GEMINI_API_KEY)
 
     prompt = f"""
     以下のYouTube動画の字幕テキストを分析し、内容を要約してJSON形式で回答してください：
@@ -299,31 +298,25 @@ async def analyze_transcript(request: AnalyzeRequest):
     }}
     """
 
+    generation_config = GenerationConfig(
+        temperature=0.5,
+        response_mime_type="application/json",
+    )
+
     try:
-        print("Sending request to OpenAI API for analysis...")
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that analyzes video transcripts and responds in JSON format.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.5,
+        print("Sending request to Gemini API for analysis...")
+        model = genai.GenerativeModel(MODEL)
+        response = await model.generate_content_async(
+            prompt,
+            generation_config=generation_config,
         )
-        analysis_content = response.choices[0].message.content
-        analysis_result = AnalysisResult.model_validate_json(analysis_content)
+
+        analysis_result = AnalysisResult.model_validate_json(response.text)
         print("Analysis completed successfully.")
 
-    except openai.APIError as e:
-        print(f"OpenAI API error: {e}")
-        raise HTTPException(status_code=502, detail=f"OpenAI API error: {e}")
-
-    except (json.JSONDecodeError, Exception) as e:
-        print(f"Failed to parse OpenAI response: {e}")
-        raise HTTPException(status_code=500, detail="Failed to parse analysis result.")
+    except Exception as e:
+        print(f"Gemini API error: {e}")
+        raise HTTPException(status_code=502, detail=f"Gemini API error: {str(e)}")
 
     # セッション情報を更新して保存
     session_info.status = "analyzed"

@@ -3,13 +3,13 @@ import re
 
 # 環境変数からAPI_KEYの値を取得
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # 使用するモデルの指定
-MODEL = "gpt-4o"
+MODEL = "gemini-1.5-flash"
 
 # APIキーが設定されていない場合のガード処理
-_required = {"YOUTUBE_API_KEY": YOUTUBE_API_KEY, "OPENAI_API_KEY": OPENAI_API_KEY}
+_required = {"YOUTUBE_API_KEY": YOUTUBE_API_KEY, "GEMINI_API_KEY": GEMINI_API_KEY}
 _missing = [k for k, v in _required.items() if not v]
 if _missing:
     raise RuntimeError(f"必須環境変数が設定されていません: {', '.join(_missing)}")
