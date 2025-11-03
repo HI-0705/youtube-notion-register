@@ -90,7 +90,7 @@ const registerToNotion = async () => {
   error.value = null
 
   try {
-    const response = await api.registerToNotion({
+    const payload = await api.registerToNotion({
       session_id: mainStore.sessionId,
       modifications: {
         title: finalData.value.suggested_titles,
@@ -100,16 +100,12 @@ const registerToNotion = async () => {
       },
     })
 
-    const payload = response.data ?? response
-    const notionUrlFromPayload =
-      payload.data?.notion_url ?? payload.notion_url ?? payload.data?.notionUrl ?? payload.notionUrl
-
-    if (payload.status === 'success' && notionUrlFromPayload) {
-      notionUrl.value = notionUrlFromPayload
+    if (payload.status === 'success' && payload.data?.notion_url) {
+      notionUrl.value = payload.data.notion_url
       mainStore.clearSessionId()
       mainStore.setAnalysisResult({ summary: '', suggested_titles: '', categories: [], emotions: '' })
     } else {
-      throw new Error(payload.message || payload.detail || '登録に失敗しました。')
+      throw new Error(payload.message || '登録に失敗しました。')
     }
   } catch (err: any) {
     console.error('登録エラー:', err)

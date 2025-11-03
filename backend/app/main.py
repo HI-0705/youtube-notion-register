@@ -53,12 +53,17 @@ class AnalyzeRequest(BaseModel):
     session_id: str  # セッションID
 
 
-class AnalyzeResponse(BaseModel):
+class AnalyzeResponseData(BaseModel):
     status: str  # 状態
     summary: str  # 要約テキスト
     suggested_titles: str  # 推奨タイトル
     categories: List[str]  # カテゴリ一覧
     emotions: str  # 感情
+
+
+class AnalyzeResponse(BaseModel):
+    status: str  # 状態
+    data: AnalyzeResponseData  # 分析結果
 
 
 class AnalysisResult(BaseModel):
@@ -81,9 +86,13 @@ class RegisterRequest(BaseModel):
     modifications: RegisterModifications  # ユーザーによる修正内容
 
 
+class RegisterResponseData(BaseModel):
+    notion_url: HttpUrl  # NotionページのURL
+
+
 class RegisterResponse(BaseModel):
     status: str  # 状態
-    notion_url: HttpUrl  # NotionページのURL
+    data: RegisterResponseData  # データ
 
 
 # セッション確認用
@@ -354,13 +363,15 @@ async def analyze_transcript(request: AnalyzeRequest):
         print(f"Failed to update session file: {e}")
         raise HTTPException(status_code=500, detail="Failed to update session data.")
 
-    return AnalyzeResponse(
+    response_data = AnalyzeResponseData(
         status="success",
         summary=analysis_result.summary,
         suggested_titles=analysis_result.suggested_titles,
         categories=analysis_result.categories,
         emotions=analysis_result.emotions,
     )
+
+    return AnalyzeResponse(status="success", data=response_data)
 
 
 @app.post(
@@ -450,7 +461,7 @@ async def register_to_notion(request: RegisterRequest):
 
         return RegisterResponse(
             status="success",
-            notion_url=new_page["url"],
+            data=RegisterResponseData(notion_url=new_page["url"]),
         )
 
     except Exception as e:
