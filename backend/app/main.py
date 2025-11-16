@@ -1,19 +1,24 @@
-import uuid
-import aiofiles
 import os
 import re
+import time
+import uuid
+import aiofiles
 from datetime import date, datetime, timedelta
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
+
 import google.generativeai as genai
 from google.generativeai.types import GenerationConfig
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, HttpUrl
-from youtube_transcript_api import YouTubeTranscriptApi
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from notion_client import AsyncClient
+from pydantic import BaseModel, HttpUrl
+from youtube_transcript_api import YouTubeTranscriptApi
 
+from .core.logging import seup_logging, get_logger
+from .core.exceptions import APIException, http_exception_handler, api_exception_handler
 from .core.config import (
     DATA_DIR,
     YOUTUBE_API_KEY,
@@ -23,6 +28,11 @@ from .core.config import (
     MODEL,
     parse_duration,
 )
+
+
+# ロギング設定の初期化
+seup_logging()
+logger = get_logger("app")
 
 
 # ヘルスチェック用
@@ -145,6 +155,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(APIException, api_exception_handler)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """
+    HTTPリクエストとレスポンスをログに記録するミドルウェア。
+    """
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    logger.info(
+        f"{request.method} {request.url.path} - "
+        f"Status: {response.status_code} - "
+        f"Time: {process_time:.4f}s"
+    )
+    return response
+
 
 @app.get("/api/v1/health", response_model=HealthCheckResponse, tags=["Health Check"])
 def health_check():
@@ -161,8 +190,10 @@ async def collect_video_data(request: CollectRequest):
     """
     # APIキーの存在確認
     if not YOUTUBE_API_KEY:
-        raise HTTPException(
-            status_code=500, detail="YouTube API key is not configured."
+        raise APIException(
+            status_code=500,
+            message="YouTube API key is not configured.",
+            error_code="E010",
         )
 
     # データディレクトリがない場合は作成
@@ -184,7 +215,11 @@ async def collect_video_data(request: CollectRequest):
 
     video_id = _extract_video_id(str(request.url))
     if not video_id:
-        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+        raise APIException(
+            status_code=400,
+            message="Invalid YouTube URL",
+            error_code="E001",
+        )
 
     try:
         # 動画情報を取得
@@ -195,7 +230,9 @@ async def collect_video_data(request: CollectRequest):
             .execute()
         )
         if not video_response["items"]:
-            raise HTTPException(status_code=404, detail="Video not found")
+            raise APIException(
+                status_code=404, message="Video not found", error_code="E009"
+            )
 
         item = video_response["items"][0]
         snippet = item["snippet"]
@@ -216,13 +253,16 @@ async def collect_video_data(request: CollectRequest):
             url=f"https://www.youtube.com/watch?v={video_id}",
             thumbnail_url=snippet["thumbnails"]["high"]["url"],
         )
-        print(f"Successfully fetched video info for video: {video_metadata.title}")
+        logger.info(
+            f"Successfully fetched video info for video: {video_metadata.title}"
+        )
 
     except HttpError as e:
-        print(f"An HTTP error {e.resp.status} occurred: {e.content}")
-        raise HTTPException(
+        logger.error(f"HTTP error {e.resp.status} occurred: {e.content}")
+        raise APIException(
             status_code=e.resp.status,
-            detail=f"Failed to fetch video metadata: {e.content}",
+            message="Failed to fetch video information from YouTube: {e.content}",
+            error_code="E008",
         )
 
     try:
@@ -230,13 +270,14 @@ async def collect_video_data(request: CollectRequest):
         fetched = YouTubeTranscriptApi().fetch(video_id, languages=["ja", "en"])
         transcript_text = " ".join([snippet.text for snippet in fetched])
 
-        print(f"Successfully fetched transcript for video_id: {video_id}")
-        print(f"Transcript length: {len(transcript_text)}")
+        logger.info(f"Successfully fetched transcript for video_id: {video_id}")
 
     except Exception as e:
-        print(f"Could not fetch transcript for video_id: {video_id}. Error: {e}")
-        raise HTTPException(
-            status_code=404, detail=f"Transcript not found. Error: {str(e)}"
+        logger.error(f"Could not fetch transcript for video_id: {video_id}. Error: {e}")
+        raise APIException(
+            status_code=404,
+            message=f"Transcript not found. Error: {str(e)}",
+            error_code="E002",
         )
 
     seesion_id = str(uuid.uuid4())
@@ -256,10 +297,16 @@ async def collect_video_data(request: CollectRequest):
     try:
         async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
             await f.write(session_info.model_dump_json(indent=4))
-        print(f"Session data saved to {session_file_path}")
+
+        logger.info(f"Session data saved to {session_file_path}")
+
     except Exception as e:
-        print(f"Failed to save session file: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save session data.")
+        logger.error(f"Failed to save session file: {e}")
+        raise APIException(
+            status_code=500,
+            message="Failed to save session data.",
+            error_code="E007",
+        )
 
     # レスポンスデータを作成
     response_data = CollectResponseData(
@@ -267,8 +314,6 @@ async def collect_video_data(request: CollectRequest):
         title=video_metadata.title,
         channel_name=video_metadata.channel_name,
     )
-
-    print(f"Transcript length: {len(transcript_text)} ")
 
     return CollectResponse(status="success", session_id=seesion_id, data=response_data)
 
@@ -282,8 +327,10 @@ async def analyze_transcript(request: AnalyzeRequest):
     session_file_path = os.path.join(DATA_DIR, f"{request.session_id}.json")
 
     if not os.path.exists(session_file_path):
-        raise HTTPException(
-            status_code=404, detail="Session ID '{request.session_id}' not found."
+        raise APIException(
+            status_code=404,
+            message=f"Session ID '{request.session_id}' not found.",
+            error_code="E007",
         )
 
     # セッションファイルを読み込み
@@ -292,17 +339,25 @@ async def analyze_transcript(request: AnalyzeRequest):
             content = await f.read()
             session_info = SessionInfo.model_validate_json(content)
 
-        print(f"Successfully loaded session data for session_id: {request.session_id}")
+        logger.info(f"Session data loaded for session_id: {request.session_id}")
 
     except Exception as e:
-        print(f"Failed to load session data: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load session data.")
+        logger.error(f"Failed to load session data: {e}")
+        raise APIException(
+            status_code=500,
+            message=f"Failed to load session data: {str(e)}",
+            error_code="E007",
+        )
 
-    print(f"Transcript length for analysis: {len(session_info.transcript)}")
+    logger.info(f"Starting analysis for session_id: {request.session_id}")
 
     # 動画字幕の分析・要約処理
     if not GEMINI_API_KEY:
-        raise HTTPException(status_code=500, detail="Gemini API key is not configured.")
+        raise APIException(
+            status_code=500,
+            message="Gemini API key is not configured.",
+            error_code="E010",
+        )
 
     genai.configure(api_key=GEMINI_API_KEY)
 
@@ -310,7 +365,7 @@ async def analyze_transcript(request: AnalyzeRequest):
     以下のYouTube動画の字幕テキストを分析し、内容を要約してJSON形式で回答してください：
 
     制約：
-    - 要約は300-500文字、Markdown形式
+    - 要約は400-1000文字、Markdown形式
     - タイトルは30文字以内
     - 分類タグは最大3つ
     - 感情タグは1つのみ
@@ -331,12 +386,12 @@ async def analyze_transcript(request: AnalyzeRequest):
     """
 
     generation_config = GenerationConfig(
-        temperature=0.5,
+        temperature=0.8,
         response_mime_type="application/json",
     )
 
     try:
-        print("Sending request to Gemini API for analysis...")
+        logger.info("Sending request to Gemini API for analysis...")
         model = genai.GenerativeModel(MODEL)
         response = await model.generate_content_async(
             prompt,
@@ -344,11 +399,15 @@ async def analyze_transcript(request: AnalyzeRequest):
         )
 
         analysis_result = AnalysisResult.model_validate_json(response.text)
-        print("Analysis completed successfully.")
+        logger.info("Analysis completed successfully.")
 
     except Exception as e:
-        print(f"Gemini API error: {e}")
-        raise HTTPException(status_code=502, detail=f"Gemini API error: {str(e)}")
+        logger.error(f"Gemini API error: {e}")
+        raise APIException(
+            status_code=502,
+            message=f"Gemini API error: {str(e)}",
+            error_code="E008",
+        )
 
     # セッション情報を更新して保存
     session_info.status = "analyzed"
@@ -357,11 +416,15 @@ async def analyze_transcript(request: AnalyzeRequest):
     try:
         async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
             await f.write(session_info.model_dump_json(indent=4))
-            print(f"Updated session data saved to {session_file_path}")
+            logger.info(f"Updated session data saved to {session_file_path}")
 
     except Exception as e:
-        print(f"Failed to update session file: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update session data.")
+        logger.error(f"Failed to update session file: {e}")
+        raise APIException(
+            status_code=500,
+            message="Failed to update session data.",
+            error_code="E007",
+        )
 
     response_data = AnalyzeResponseData(
         status="success",
@@ -383,21 +446,31 @@ async def register_to_notion(request: RegisterRequest):
     """
     session_file_path = os.path.join(DATA_DIR, f"{request.session_id}.json")
     if not os.path.exists(session_file_path):
-        raise HTTPException(
-            status_code=404, detail=f"Session ID '{request.session_id}' not found."
+        raise APIException(
+            status_code=404,
+            message=f"Session ID '{request.session_id}' not found.",
+            error_code="E007",
         )
     try:
         async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
             content = await f.read()
             session_info = SessionInfo.model_validate_json(content)
+        logger.info(f"Session data loaded for session_id: {request.session_id}")
+
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to load session data: {str(e)}"
+        logger.error(f"Failed to load session data: {e}")
+        raise APIException(
+            status_code=500,
+            message=f"Failed to load session data: {str(e)}",
+            error_code="E007",
         )
 
     if not NOTION_API_KEY or not NOTION_DATABASE_ID:
-        raise HTTPException(
-            status_code=500, detail="Notion API key or Database ID is not configured."
+        logger.error("Notion API key or Database ID is not configured.")
+        raise APIException(
+            status_code=500,
+            message="Notion API key or Database ID is not configured.",
+            error_code="E010",
         )
 
     notion = AsyncClient(auth=NOTION_API_KEY)
@@ -458,6 +531,9 @@ async def register_to_notion(request: RegisterRequest):
 
         async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
             await f.write(session_info.model_dump_json(indent=4))
+        logger.info(
+            f"Session status updated to 'registered' for session_id: {request.session_id}"
+        )
 
         return RegisterResponse(
             status="success",
@@ -465,7 +541,12 @@ async def register_to_notion(request: RegisterRequest):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Notion API error: {str(e)}")
+        logger.error(f"Notion API error: {e}")
+        raise APIException(
+            status_code=502,
+            message=f"Notion API error: {str(e)}",
+            error_code="E008",
+        )
 
 
 @app.get(
@@ -480,23 +561,33 @@ async def get_session_status(session_id: str):
     session_file_path = os.path.join(DATA_DIR, f"{session_id}.json")
 
     if not os.path.exists(session_file_path):
-        raise HTTPException(
-            status_code=404, detail=f"Session ID '{session_id}' not found."
+        logger.warning(f"Attempt to access non-existent session_id: {session_id}")
+        raise APIException(
+            status_code=404,
+            message=f"Session ID '{session_id}' not found.",
+            error_code="E007",
         )
 
     try:
         async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
             content = await f.read()
             session_info = SessionInfo.model_validate_json(content)
+        logger.info(f"Session data loaded for session_id: {session_id}")
 
         if session_info.expires_at < datetime.now():
-            raise HTTPException(status_code=410, detail="Session has expired.")
+            logger.warning(f"Session expired for session_id: {session_id}")
+            raise APIException(
+                status_code=410,
+                message=f"Session has expired.",
+                error_code="E007",
+            )
 
         return SessionResponse(status="success", data=session_info)
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to load session data: {str(e)}"
+        logger.error(f"Failed to load session data: {e}")
+        raise APIException(
+            status_code=500,
+            message=f"Failed to load session data: {str(e)}",
+            error_code="E007",
         )
