@@ -2,21 +2,21 @@ import os
 import re
 import time
 import uuid
-import aiofiles
-from datetime import date, datetime, timedelta
-from typing import Any, List, Literal, Optional
+from datetime import datetime, timedelta
+from typing import Optional
 
 import google.generativeai as genai
 from google.generativeai.types import GenerationConfig
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from notion_client import AsyncClient
-from pydantic import BaseModel, HttpUrl
 from youtube_transcript_api import YouTubeTranscriptApi
 
+from .models import schemas
+from .services.session_service import session_service
 from .core.logging import seup_logging, get_logger
 from .core.exceptions import APIException, http_exception_handler, api_exception_handler
 from .core.config import (
@@ -29,111 +29,9 @@ from .core.config import (
     parse_duration,
 )
 
-
 # ロギング設定の初期化
 seup_logging()
 logger = get_logger("app")
-
-
-# ヘルスチェック用
-class HealthCheckResponse(BaseModel):
-    status: str  # サーバーの状態
-
-
-# データ収集用
-class CollectRequest(BaseModel):
-    url: HttpUrl  # URL形式フィールド
-    channel_id: Optional[str] = None  # チャンネルID
-
-
-class CollectResponseData(BaseModel):
-    video_id: str  # 動画ID
-    title: str  # 動画タイトル
-    channel_name: str  # チャンネル名
-
-
-class CollectResponse(BaseModel):
-    status: str  # 状態
-    session_id: str  # セッションID
-    data: CollectResponseData  # 動画情報
-
-
-# 分析用
-class AnalyzeRequest(BaseModel):
-    session_id: str  # セッションID
-
-
-class AnalyzeResponseData(BaseModel):
-    status: str  # 状態
-    summary: str  # 要約テキスト
-    suggested_titles: str  # 推奨タイトル
-    categories: List[str]  # カテゴリ一覧
-    emotions: str  # 感情
-
-
-class AnalyzeResponse(BaseModel):
-    status: str  # 状態
-    data: AnalyzeResponseData  # 分析結果
-
-
-class AnalysisResult(BaseModel):
-    summary: str
-    suggested_titles: str
-    categories: List[str]
-    emotions: str
-
-
-# 登録用
-class RegisterModifications(BaseModel):
-    title: str  # タイトル
-    summary: str  # 要約
-    categories: List[str]  # カテゴリ一覧
-    emotions: str  # 感情
-
-
-class RegisterRequest(BaseModel):
-    session_id: str  # セッションID
-    modifications: RegisterModifications  # ユーザーによる修正内容
-
-
-class RegisterResponseData(BaseModel):
-    notion_url: HttpUrl  # NotionページのURL
-
-
-class RegisterResponse(BaseModel):
-    status: str  # 状態
-    data: RegisterResponseData  # データ
-
-
-# セッション確認用
-class VideoMetadata(BaseModel):
-    video_id: str  # 動画ID
-    title: str  # 動画タイトル
-    channel_name: str  # チャンネル名
-    published_at: date  # 公開日
-    duration: str  # 動画の長さ（ISO 8601形式）
-    duration_seconds: int  # 秒数
-    view_count: Optional[int] = None  # 再生回数
-    url: HttpUrl  # 動画URL
-    thumbnail_url: Optional[HttpUrl] = None  # サムネイルURL
-
-
-class SessionInfo(BaseModel):
-    session_id: str  # セッションID
-    timestamp: datetime  # セッション作成日時
-    expires_at: datetime  # セッション有効期限
-    video_data: VideoMetadata  # 動画メタデータ
-    transcript: str  # 字幕テキスト
-    transcript_language: str  # 字幕言語
-    status: Literal["collected", "analyzed", "registered", "error"]  # 処理状態
-    created_by: str  # 作成者情報
-    analysis_result: Optional[AnalysisResult] = None  # 分析結果
-
-
-class SessionResponse(BaseModel):
-    status: str  # 状態
-    data: SessionInfo  # セッション情報
-
 
 # FastAPIインスタンス生成
 app = FastAPI(
@@ -175,7 +73,9 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-@app.get("/api/v1/health", response_model=HealthCheckResponse, tags=["Health Check"])
+@app.get(
+    "/api/v1/health", response_model=schemas.HealthCheckResponse, tags=["Health Check"]
+)
 def health_check():
     """
     アプリケーションのヘルスチェック用エンドポイント。
@@ -183,8 +83,10 @@ def health_check():
     return {"status": "success"}
 
 
-@app.post("/api/v1/collect", response_model=CollectResponse, tags=["Video Processing"])
-async def collect_video_data(request: CollectRequest):
+@app.post(
+    "/api/v1/collect", response_model=schemas.CollectResponse, tags=["Video Processing"]
+)
+async def collect_video_data(request: schemas.CollectRequest):
     """
     YouTube動画のURLを受け取り、字幕データ収集するエンドポイント
     """
@@ -240,7 +142,7 @@ async def collect_video_data(request: CollectRequest):
         statistics = item.get("statistics", {})
 
         # VideoMetadataモデルの作成
-        video_metadata = VideoMetadata(
+        video_metadata = schemas.VideoMetadata(
             video_id=video_id,
             title=snippet["title"],
             channel_name=snippet["channelTitle"],
@@ -282,7 +184,7 @@ async def collect_video_data(request: CollectRequest):
 
     seesion_id = str(uuid.uuid4())
     now = datetime.now()
-    session_info = SessionInfo(
+    session_info = schemas.SessionInfo(
         session_id=seesion_id,
         timestamp=now,
         expires_at=now + timedelta(days=1),
@@ -293,63 +195,30 @@ async def collect_video_data(request: CollectRequest):
         created_by="system",
     )
 
-    session_file_path = os.path.join(DATA_DIR, f"{seesion_id}.json")
-    try:
-        async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
-            await f.write(session_info.model_dump_json(indent=4))
-
-        logger.info(f"Session data saved to {session_file_path}")
-
-    except Exception as e:
-        logger.error(f"Failed to save session file: {e}")
-        raise APIException(
-            status_code=500,
-            message="Failed to save session data.",
-            error_code="E007",
-        )
+    await session_service.save_session(session_info)
+    logger.info(f"Session data saved for session_id: {session_info.session_id}")
 
     # レスポンスデータを作成
-    response_data = CollectResponseData(
+    response_data = schemas.CollectResponseData(
         video_id=video_id,
         title=video_metadata.title,
         channel_name=video_metadata.channel_name,
     )
 
-    return CollectResponse(status="success", session_id=seesion_id, data=response_data)
+    return schemas.CollectResponse(
+        status="success", session_id=seesion_id, data=response_data
+    )
 
 
-@app.post("/api/v1/analyze", response_model=AnalyzeResponse, tags=["Video Processing"])
-async def analyze_transcript(request: AnalyzeRequest):
+@app.post(
+    "/api/v1/analyze", response_model=schemas.AnalyzeResponse, tags=["Video Processing"]
+)
+async def analyze_transcript(request: schemas.AnalyzeRequest):
     """
     セッションIDを受け取り、動画の分析・要約を行うエンドポイント
     """
-    # セッションファイルのパスを構築
-    session_file_path = os.path.join(DATA_DIR, f"{request.session_id}.json")
-
-    if not os.path.exists(session_file_path):
-        raise APIException(
-            status_code=404,
-            message=f"Session ID '{request.session_id}' not found.",
-            error_code="E007",
-        )
-
-    # セッションファイルを読み込み
-    try:
-        async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
-            content = await f.read()
-            session_info = SessionInfo.model_validate_json(content)
-
-        logger.info(f"Session data loaded for session_id: {request.session_id}")
-
-    except Exception as e:
-        logger.error(f"Failed to load session data: {e}")
-        raise APIException(
-            status_code=500,
-            message=f"Failed to load session data: {str(e)}",
-            error_code="E007",
-        )
-
-    logger.info(f"Starting analysis for session_id: {request.session_id}")
+    session_info = await session_service.load_session(request.session_id)
+    logger.info(f"Session data loaded for session_id: {request.session_id}")
 
     # 動画字幕の分析・要約処理
     if not GEMINI_API_KEY:
@@ -398,7 +267,7 @@ async def analyze_transcript(request: AnalyzeRequest):
             generation_config=generation_config,
         )
 
-        analysis_result = AnalysisResult.model_validate_json(response.text)
+        analysis_result = schemas.AnalysisResult.model_validate_json(response.text)
         logger.info("Analysis completed successfully.")
 
     except Exception as e:
@@ -412,21 +281,10 @@ async def analyze_transcript(request: AnalyzeRequest):
     # セッション情報を更新して保存
     session_info.status = "analyzed"
     session_info.analysis_result = analysis_result
+    await session_service.save_session(session_info)
+    logger.info(f"Updated session data saved for session_id: {session_info.session_id}")
 
-    try:
-        async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
-            await f.write(session_info.model_dump_json(indent=4))
-            logger.info(f"Updated session data saved to {session_file_path}")
-
-    except Exception as e:
-        logger.error(f"Failed to update session file: {e}")
-        raise APIException(
-            status_code=500,
-            message="Failed to update session data.",
-            error_code="E007",
-        )
-
-    response_data = AnalyzeResponseData(
+    response_data = schemas.AnalyzeResponseData(
         status="success",
         summary=analysis_result.summary,
         suggested_titles=analysis_result.suggested_titles,
@@ -434,36 +292,20 @@ async def analyze_transcript(request: AnalyzeRequest):
         emotions=analysis_result.emotions,
     )
 
-    return AnalyzeResponse(status="success", data=response_data)
+    return schemas.AnalyzeResponse(status="success", data=response_data)
 
 
 @app.post(
-    "/api/v1/register", response_model=RegisterResponse, tags=["Video Processing"]
+    "/api/v1/register",
+    response_model=schemas.RegisterResponse,
+    tags=["Video Processing"],
 )
-async def register_to_notion(request: RegisterRequest):
+async def register_to_notion(request: schemas.RegisterRequest):
     """
     最終的な内容を受け取り、Notionに登録するエンドポイント。
     """
-    session_file_path = os.path.join(DATA_DIR, f"{request.session_id}.json")
-    if not os.path.exists(session_file_path):
-        raise APIException(
-            status_code=404,
-            message=f"Session ID '{request.session_id}' not found.",
-            error_code="E007",
-        )
-    try:
-        async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
-            content = await f.read()
-            session_info = SessionInfo.model_validate_json(content)
-        logger.info(f"Session data loaded for session_id: {request.session_id}")
-
-    except Exception as e:
-        logger.error(f"Failed to load session data: {e}")
-        raise APIException(
-            status_code=500,
-            message=f"Failed to load session data: {str(e)}",
-            error_code="E007",
-        )
+    session_info = await session_service.load_session(request.session_id)
+    logger.info(f"Session data loaded for session_id: {request.session_id}")
 
     if not NOTION_API_KEY or not NOTION_DATABASE_ID:
         logger.error("Notion API key or Database ID is not configured.")
@@ -527,17 +369,16 @@ async def register_to_notion(request: RegisterRequest):
             ],
         )
 
+        # セッション情報を更新して保存
         session_info.status = "registered"
-
-        async with aiofiles.open(session_file_path, "w", encoding="utf-8") as f:
-            await f.write(session_info.model_dump_json(indent=4))
+        await session_service.save_session(session_info)
         logger.info(
-            f"Session status updated to 'registered' for session_id: {request.session_id}"
+            f"Session status updated to 'registered' for session_id: {session_info.session_id}"
         )
 
-        return RegisterResponse(
+        return schemas.RegisterResponse(
             status="success",
-            data=RegisterResponseData(notion_url=new_page["url"]),
+            data=schemas.RegisterResponseData(notion_url=new_page["url"]),
         )
 
     except Exception as e:
@@ -551,43 +392,22 @@ async def register_to_notion(request: RegisterRequest):
 
 @app.get(
     "/api/v1/session/{session_id}",
-    response_model=SessionResponse,
+    response_model=schemas.SessionResponse,
     tags=["Session Management"],
 )
 async def get_session_status(session_id: str):
     """
     指定されたセッションIDの状態と関連データを取得するエンドポイント。
     """
-    session_file_path = os.path.join(DATA_DIR, f"{session_id}.json")
+    session_info = await session_service.load_session(session_id)
+    logger.info(f"Session data loaded for session_id: {session_id}")
 
-    if not os.path.exists(session_file_path):
-        logger.warning(f"Attempt to access non-existent session_id: {session_id}")
+    if session_info.expires_at < datetime.now():
+        logger.warning(f"Session expired for session_id: {session_id}")
         raise APIException(
-            status_code=404,
-            message=f"Session ID '{session_id}' not found.",
-            error_code="E007",
+            status_code=status.HTTP_410_GONE,
+            message=f"Session has expired.",
+            error_code="E006",
         )
 
-    try:
-        async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
-            content = await f.read()
-            session_info = SessionInfo.model_validate_json(content)
-        logger.info(f"Session data loaded for session_id: {session_id}")
-
-        if session_info.expires_at < datetime.now():
-            logger.warning(f"Session expired for session_id: {session_id}")
-            raise APIException(
-                status_code=410,
-                message=f"Session has expired.",
-                error_code="E007",
-            )
-
-        return SessionResponse(status="success", data=session_info)
-
-    except Exception as e:
-        logger.error(f"Failed to load session data: {e}")
-        raise APIException(
-            status_code=500,
-            message=f"Failed to load session data: {str(e)}",
-            error_code="E007",
-        )
+    return schemas.SessionResponse(status="success", data=session_info)
