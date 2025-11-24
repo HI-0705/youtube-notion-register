@@ -8,7 +8,7 @@ from ..models.schemas import SessionInfo
 
 
 class SessionService:
-    """セッションファイルの管理を行うサービスクラス"""
+    """セッションファイル管理クラス"""
 
     def _get_session_file_path(self, session_id: str) -> str:
         """セッションIDに対応するファイルパスを取得"""

@@ -1,33 +1,23 @@
-import os
-import re
 import time
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional
 
-import google.generativeai as genai
-from google.generativeai.types import GenerationConfig
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from notion_client import AsyncClient
-from youtube_transcript_api import YouTubeTranscriptApi
 
 from .models import schemas
-from .services.session_service import session_service
 from .core.logging import seup_logging, get_logger
 from .core.exceptions import APIException, http_exception_handler, api_exception_handler
-from .core.config import (
-    DATA_DIR,
-    YOUTUBE_API_KEY,
-    GEMINI_API_KEY,
-    NOTION_API_KEY,
-    NOTION_DATABASE_ID,
-    MODEL,
-    parse_duration,
-)
+from .services.session_service import session_service
+from .services.youtube_service import YouTubeService
+from .services.analysis_service import AnalysisService
+from .services.notion_service import NotionService
+
+
+# Serviceクラスインスタンス生成
+youtube_service = YouTubeService()
+analysis_service = AnalysisService()
+notion_service = NotionService()
 
 # ロギング設定の初期化
 seup_logging()
@@ -90,98 +80,12 @@ async def collect_video_data(request: schemas.CollectRequest):
     """
     YouTube動画のURLを受け取り、字幕データ収集するエンドポイント
     """
-    # APIキーの存在確認
-    if not YOUTUBE_API_KEY:
-        raise APIException(
-            status_code=500,
-            message="YouTube API key is not configured.",
-            error_code="E010",
-        )
+    # 動画メタデータと字幕を取得
+    video_metadata, transcript_text = await youtube_service.fetch_video_data(
+        str(request.url)
+    )
 
-    # データディレクトリがない場合は作成
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-
-    # 動画IDを正規表現で抽出
-    def _extract_video_id(url: str) -> Optional[str]:
-        patterns = [
-            r"v=([A-Za-z0-9_-]{11})",
-            r"youtu\.be/([A-Za-z0-9_-]{11})",
-            r"embed/([A-Za-z0-9_-]{11})",
-        ]
-        for p in patterns:
-            m = re.search(p, url)
-            if m:
-                return m.group(1)
-        return None
-
-    video_id = _extract_video_id(str(request.url))
-    if not video_id:
-        raise APIException(
-            status_code=400,
-            message="Invalid YouTube URL",
-            error_code="E001",
-        )
-
-    try:
-        # 動画情報を取得
-        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-        video_response = (
-            youtube.videos()
-            .list(part="snippet,contentDetails,statistics", id=video_id)
-            .execute()
-        )
-        if not video_response["items"]:
-            raise APIException(
-                status_code=404, message="Video not found", error_code="E009"
-            )
-
-        item = video_response["items"][0]
-        snippet = item["snippet"]
-        content_details = item["contentDetails"]
-        statistics = item.get("statistics", {})
-
-        # VideoMetadataモデルの作成
-        video_metadata = schemas.VideoMetadata(
-            video_id=video_id,
-            title=snippet["title"],
-            channel_name=snippet["channelTitle"],
-            published_at=datetime.fromisoformat(
-                snippet["publishedAt"].replace("Z", "+00:00")
-            ).date(),
-            duration=content_details["duration"],
-            duration_seconds=parse_duration(content_details["duration"]),
-            view_count=int(statistics.get("viewCount", 0)),
-            url=f"https://www.youtube.com/watch?v={video_id}",
-            thumbnail_url=snippet["thumbnails"]["high"]["url"],
-        )
-        logger.info(
-            f"Successfully fetched video info for video: {video_metadata.title}"
-        )
-
-    except HttpError as e:
-        logger.error(f"HTTP error {e.resp.status} occurred: {e.content}")
-        raise APIException(
-            status_code=e.resp.status,
-            message="Failed to fetch video information from YouTube: {e.content}",
-            error_code="E008",
-        )
-
-    try:
-        # 字幕データを取得
-        fetched = YouTubeTranscriptApi().fetch(video_id, languages=["ja", "en"])
-        transcript_text = " ".join([snippet.text for snippet in fetched])
-
-        logger.info(f"Successfully fetched transcript for video_id: {video_id}")
-
-    except Exception as e:
-        logger.error(f"Could not fetch transcript for video_id: {video_id}. Error: {e}")
-        raise APIException(
-            status_code=404,
-            message=f"Transcript not found. Error: {str(e)}",
-            error_code="E002",
-        )
-
+    # セッション情報を作成して保存
     seesion_id = str(uuid.uuid4())
     now = datetime.now()
     session_info = schemas.SessionInfo(
@@ -200,7 +104,7 @@ async def collect_video_data(request: schemas.CollectRequest):
 
     # レスポンスデータを作成
     response_data = schemas.CollectResponseData(
-        video_id=video_id,
+        video_id=video_metadata.video_id,
         title=video_metadata.title,
         channel_name=video_metadata.channel_name,
     )
@@ -221,62 +125,7 @@ async def analyze_transcript(request: schemas.AnalyzeRequest):
     logger.info(f"Session data loaded for session_id: {request.session_id}")
 
     # 動画字幕の分析・要約処理
-    if not GEMINI_API_KEY:
-        raise APIException(
-            status_code=500,
-            message="Gemini API key is not configured.",
-            error_code="E010",
-        )
-
-    genai.configure(api_key=GEMINI_API_KEY)
-
-    prompt = f"""
-    以下のYouTube動画の字幕テキストを分析し、内容を要約してJSON形式で回答してください：
-
-    制約：
-    - 要約は400-1000文字、Markdown形式
-    - タイトルは30文字以内
-    - 分類タグは最大3つ
-    - 感情タグは1つのみ
-
-    分類タグ選択肢: ["音楽", "動物", "スポーツ", "旅行", "ゲーム", "コメディ", "エンターテインメント", "教育", "科学", "映画", "アニメ", "クラシック", "ドキュメンタリー", "ドラマ", "ショートムービー", "その他"]
-    感情タグ選択肢: ["感動", "愉快", "驚愕", "啓発", "考察", "癒着", "その他"]
-
-    字幕テキスト:
-    {session_info.transcript}
-
-    回答は必ずJSON形式で、以下のキーを持つオブジェクトとしてください:
-    {{
-    "summary": "Markdown形式の要約",
-    "suggested_titles": "提案タイトル",
-    "categories": ["タグ1", "タグ2"],
-    "emotions": "感情タグ"
-    }}
-    """
-
-    generation_config = GenerationConfig(
-        temperature=0.8,
-        response_mime_type="application/json",
-    )
-
-    try:
-        logger.info("Sending request to Gemini API for analysis...")
-        model = genai.GenerativeModel(MODEL)
-        response = await model.generate_content_async(
-            prompt,
-            generation_config=generation_config,
-        )
-
-        analysis_result = schemas.AnalysisResult.model_validate_json(response.text)
-        logger.info("Analysis completed successfully.")
-
-    except Exception as e:
-        logger.error(f"Gemini API error: {e}")
-        raise APIException(
-            status_code=502,
-            message=f"Gemini API error: {str(e)}",
-            error_code="E008",
-        )
+    analysis_result = await analysis_service.analyze_transcript(session_info.transcript)
 
     # セッション情報を更新して保存
     session_info.status = "analyzed"
@@ -307,87 +156,22 @@ async def register_to_notion(request: schemas.RegisterRequest):
     session_info = await session_service.load_session(request.session_id)
     logger.info(f"Session data loaded for session_id: {request.session_id}")
 
-    if not NOTION_API_KEY or not NOTION_DATABASE_ID:
-        logger.error("Notion API key or Database ID is not configured.")
-        raise APIException(
-            status_code=500,
-            message="Notion API key or Database ID is not configured.",
-            error_code="E010",
-        )
+    # Notionに登録
+    notion_url = await notion_service.register_page(
+        request.modifications, session_info.video_data
+    )
 
-    notion = AsyncClient(auth=NOTION_API_KEY)
-    modifications = request.modifications
-    video_data = session_info.video_data
+    # セッション情報を更新して保存
+    session_info.status = "registered"
+    await session_service.save_session(session_info)
+    logger.info(
+        f"Session status updated to 'registered' for session_id: {session_info.session_id}"
+    )
 
-    try:
-        new_page = await notion.pages.create(
-            parent={"database_id": NOTION_DATABASE_ID},
-            properties={
-                "Name": {"title": [{"text": {"content": modifications.title}}]},
-                "分類": {
-                    "multi_select": [
-                        {"name": name} for name in modifications.categories
-                    ]
-                },
-                "感情": {"select": {"name": modifications.emotions}},
-                "動画URL": {"url": str(video_data.url)},
-                "チャンネル名": {
-                    "rich_text": [{"text": {"content": video_data.channel_name}}]
-                },
-                "公開日": {"date": {"start": video_data.published_at.isoformat()}},
-                "動画時間": {"number": video_data.duration_seconds},
-                "視聴回数": {"number": video_data.view_count},
-            },
-            children=[
-                {
-                    "object": "block",
-                    "type": "heading_2",
-                    "heading_2": {"rich_text": [{"text": {"content": "📋 要約"}}]},
-                },
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [{"text": {"content": modifications.summary}}]
-                    },
-                },
-                {
-                    "object": "block",
-                    "type": "divider",
-                    "divider": {},
-                },
-                {
-                    "object": "block",
-                    "type": "heading_3",
-                    "heading_3": {"rich_text": [{"text": {"content": "🔗 元動画"}}]},
-                },
-                {
-                    "object": "block",
-                    "type": "bookmark",
-                    "bookmark": {"url": str(video_data.url)},
-                },
-            ],
-        )
-
-        # セッション情報を更新して保存
-        session_info.status = "registered"
-        await session_service.save_session(session_info)
-        logger.info(
-            f"Session status updated to 'registered' for session_id: {session_info.session_id}"
-        )
-
-        return schemas.RegisterResponse(
-            status="success",
-            data=schemas.RegisterResponseData(notion_url=new_page["url"]),
-        )
-
-    except Exception as e:
-        logger.error(f"Notion API error: {e}")
-        raise APIException(
-            status_code=502,
-            message=f"Notion API error: {str(e)}",
-            error_code="E008",
-        )
+    return schemas.RegisterResponse(
+        status="success",
+        data=schemas.RegisterResponseData(notion_url=notion_url),
+    )
 
 
 @app.get(
