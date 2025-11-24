@@ -49,7 +49,3 @@ class SessionService:
                 message=f"Failed to load session data: {e}",
                 error_code="E007",
             )
-
-
-# インスタンス生成
-session_service = SessionService()

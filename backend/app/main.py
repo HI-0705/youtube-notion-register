@@ -2,22 +2,18 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api.v1 import deps
 from .models import schemas
 from .core.logging import seup_logging, get_logger
 from .core.exceptions import APIException, http_exception_handler, api_exception_handler
-from .services.session_service import session_service
+from .services.session_service import SessionService
 from .services.youtube_service import YouTubeService
 from .services.analysis_service import AnalysisService
 from .services.notion_service import NotionService
 
-
-# Serviceクラスインスタンス生成
-youtube_service = YouTubeService()
-analysis_service = AnalysisService()
-notion_service = NotionService()
 
 # ロギング設定の初期化
 seup_logging()
@@ -76,7 +72,11 @@ def health_check():
 @app.post(
     "/api/v1/collect", response_model=schemas.CollectResponse, tags=["Video Processing"]
 )
-async def collect_video_data(request: schemas.CollectRequest):
+async def collect_video_data(
+    request: schemas.CollectRequest,
+    youtube_service: YouTubeService = Depends(deps.get_youtube_service),
+    session_service: SessionService = Depends(deps.get_session_service),
+):
     """
     YouTube動画のURLを受け取り、字幕データ収集するエンドポイント
     """
@@ -86,10 +86,10 @@ async def collect_video_data(request: schemas.CollectRequest):
     )
 
     # セッション情報を作成して保存
-    seesion_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
     now = datetime.now()
     session_info = schemas.SessionInfo(
-        session_id=seesion_id,
+        session_id=session_id,
         timestamp=now,
         expires_at=now + timedelta(days=1),
         video_data=video_metadata,
@@ -110,14 +110,18 @@ async def collect_video_data(request: schemas.CollectRequest):
     )
 
     return schemas.CollectResponse(
-        status="success", session_id=seesion_id, data=response_data
+        status="success", session_id=session_id, data=response_data
     )
 
 
 @app.post(
     "/api/v1/analyze", response_model=schemas.AnalyzeResponse, tags=["Video Processing"]
 )
-async def analyze_transcript(request: schemas.AnalyzeRequest):
+async def analyze_transcript(
+    request: schemas.AnalyzeRequest,
+    analysis_service: AnalysisService = Depends(deps.get_analysis_service),
+    session_service: SessionService = Depends(deps.get_session_service),
+):
     """
     セッションIDを受け取り、動画の分析・要約を行うエンドポイント
     """
@@ -149,7 +153,11 @@ async def analyze_transcript(request: schemas.AnalyzeRequest):
     response_model=schemas.RegisterResponse,
     tags=["Video Processing"],
 )
-async def register_to_notion(request: schemas.RegisterRequest):
+async def register_to_notion(
+    request: schemas.RegisterRequest,
+    notion_service: NotionService = Depends(deps.get_notion_service),
+    session_service: SessionService = Depends(deps.get_session_service),
+):
     """
     最終的な内容を受け取り、Notionに登録するエンドポイント。
     """
@@ -179,7 +187,10 @@ async def register_to_notion(request: schemas.RegisterRequest):
     response_model=schemas.SessionResponse,
     tags=["Session Management"],
 )
-async def get_session_status(session_id: str):
+async def get_session_status(
+    session_id: str,
+    session_service: SessionService = Depends(deps.get_session_service),
+):
     """
     指定されたセッションIDの状態と関連データを取得するエンドポイント。
     """
