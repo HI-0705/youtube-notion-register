@@ -32,7 +32,6 @@ class AnalyzeRequest(BaseModel):
 
 
 class AnalyzeResponseData(BaseModel):
-    status: str  # 状態
     summary: str  # 要約テキスト
     suggested_titles: str  # 推奨タイトル
     categories: List[str]  # カテゴリ一覧
