@@ -60,7 +60,7 @@ LOGGING_CONFIG = {
 }
 
 
-def seup_logging():
+def setup_logging():
     dictConfig(LOGGING_CONFIG)
 
 
