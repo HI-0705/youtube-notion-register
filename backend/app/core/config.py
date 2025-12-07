@@ -8,7 +8,7 @@ NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
 # 使用するモデルの指定
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.5-flash"
 
 # APIキーが設定されていない場合のガード処理
 _required = {"YOUTUBE_API_KEY": YOUTUBE_API_KEY, "GEMINI_API_KEY": GEMINI_API_KEY}

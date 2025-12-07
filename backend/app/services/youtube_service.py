@@ -93,6 +93,9 @@ class YouTubeService:
             )
             logger.info(f"Successfully fetched video info: {video_metadata.title}")
 
+        except APIException:
+            raise
+
         except HttpError as e:
             logger.error(f"HTTP error {e.resp.status} occurred: {e.content}")
             raise APIException(

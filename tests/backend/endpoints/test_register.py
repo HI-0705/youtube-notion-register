@@ -113,7 +113,7 @@ def test_register_video_data(mock_services):
     # load_sessionの引数検証
     mock_session.load_session.assert_called_once_with("dummy-session-id-for-register")
 
-    # create_notion_pageの呼び出し検証
+    # register_pageの呼び出し検証
     mock_notion.register_page.assert_called_once()
 
     # save_sessionの呼び出し検証

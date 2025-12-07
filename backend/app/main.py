@@ -3,13 +3,13 @@ import time
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from .core.logging import seup_logging, get_logger
+from .core.logging import setup_logging, get_logger
 from .core.exceptions import APIException, http_exception_handler, api_exception_handler
 from .api.v1.endpoints import health, collect, analyze, register, session
 
 
 # ロギング設定の初期化
-seup_logging()
+setup_logging()
 logger = get_logger("app")
 
 # FastAPIインスタンス生成
