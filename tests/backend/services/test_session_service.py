@@ -1,9 +1,9 @@
 import pytest
 from datetime import datetime
 
-from backend.app.services.session_service import SessionService
-from backend.app.models.schemas import SessionInfo, VideoMetadata
-from backend.app.core.exceptions import APIException
+from app.services.session_service import SessionService
+from app.models.schemas import SessionInfo, VideoMetadata
+from app.core.exceptions import APIException
 
 TEST_SESSION_ID = "test-session-id"
 
@@ -52,9 +52,7 @@ def setup_patched_data_dir(tmp_path, monkeypatch):
     test_data_dir = tmp_path / "data"
     test_data_dir.mkdir()
 
-    monkeypatch.setattr(
-        "backend.app.services.session_service.DATA_DIR", str(test_data_dir)
-    )
+    monkeypatch.setattr("app.services.session_service.DATA_DIR", str(test_data_dir))
     return test_data_dir
 
 
@@ -126,9 +124,7 @@ async def test_save_session_failure(
     def raise_io_error(*args, **kwargs):
         raise IOError("Unable to write file")
 
-    monkeypatch.setattr(
-        "backend.app.services.session_service.aiofiles.open", raise_io_error
-    )
+    monkeypatch.setattr("app.services.session_service.aiofiles.open", raise_io_error)
 
     # セッションデータを保存
     with pytest.raises(APIException) as exc_info:

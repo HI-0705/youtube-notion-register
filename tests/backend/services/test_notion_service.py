@@ -3,12 +3,12 @@ from unittest.mock import patch, AsyncMock
 from datetime import date
 from pydantic import HttpUrl
 
-from backend.app.services.notion_service import NotionService
-from backend.app.models.schemas import (
+from app.services.notion_service import NotionService
+from app.models.schemas import (
     VideoMetadata,
     RegisterModifications,
 )
-from backend.app.core.exceptions import APIException
+from app.core.exceptions import APIException
 
 
 @pytest.fixture
@@ -34,11 +34,9 @@ def setup_notion_env(monkeypatch):
     """
     ダミーのAPIキーとデータベースIDを設定
     """
+    monkeypatch.setattr("app.services.notion_service.NOTION_API_KEY", "dummy_api_key")
     monkeypatch.setattr(
-        "backend.app.services.notion_service.NOTION_API_KEY", "dummy_api_key"
-    )
-    monkeypatch.setattr(
-        "backend.app.services.notion_service.NOTION_DATABASE_ID", "dummy_database_id"
+        "app.services.notion_service.NOTION_DATABASE_ID", "dummy_database_id"
     )
 
 
@@ -47,7 +45,7 @@ def mock_notion_client():
     """
     Notionクライアントをモック化する
     """
-    with patch("backend.app.services.notion_service.AsyncClient") as mock_client:
+    with patch("app.services.notion_service.AsyncClient") as mock_client:
         mock_pages = AsyncMock()
         mock_pages.create.return_value = {
             "id": "dummy_page_id",
@@ -138,7 +136,7 @@ def test_initialization_no_api_key(monkeypatch):
     """
     APIキーが設定されていない場合
     """
-    monkeypatch.setattr("backend.app.services.notion_service.NOTION_API_KEY", None)
+    monkeypatch.setattr("app.services.notion_service.NOTION_API_KEY", None)
 
     with pytest.raises(APIException) as exc_info:
         NotionService()
@@ -151,7 +149,7 @@ def test_initialization_no_database_id(monkeypatch):
     """
     データベースIDが設定されていない場合
     """
-    monkeypatch.setattr("backend.app.services.notion_service.NOTION_DATABASE_ID", None)
+    monkeypatch.setattr("app.services.notion_service.NOTION_DATABASE_ID", None)
 
     with pytest.raises(APIException) as exc_info:
         NotionService()

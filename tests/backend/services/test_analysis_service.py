@@ -2,9 +2,9 @@ import pytest
 import json
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from backend.app.services.analysis_service import AnalysisService
-from backend.app.models.schemas import AnalysisResult
-from backend.app.core.exceptions import APIException
+from app.services.analysis_service import AnalysisService
+from app.models.schemas import AnalysisResult
+from app.core.exceptions import APIException
 
 DUMMY_TRANSCRIPT = "テスト用のダミー字幕データ"
 DUMMY_ANALYSIS_RESULT = json.dumps(
@@ -22,9 +22,7 @@ def setup_gemini_env(monkeypatch):
     """
     ダミーのAPIキーを設定
     """
-    monkeypatch.setattr(
-        "backend.app.services.analysis_service.GEMINI_API_KEY", "dummy_api_key"
-    )
+    monkeypatch.setattr("app.services.analysis_service.GEMINI_API_KEY", "dummy_api_key")
 
 
 @pytest.fixture
@@ -32,9 +30,7 @@ def mock_gemini_model():
     """
     GenerativeModelをモック化する
     """
-    with patch(
-        "backend.app.services.analysis_service.genai.GenerativeModel"
-    ) as mock_model:
+    with patch("app.services.analysis_service.genai.GenerativeModel") as mock_model:
         mock_instance = AsyncMock()
         mock_response = MagicMock()
         mock_response.text = DUMMY_ANALYSIS_RESULT
@@ -67,7 +63,7 @@ def test_initialization_no_api_key(monkeypatch):
     """
     APIキーが設定されていない場合
     """
-    monkeypatch.setattr("backend.app.services.analysis_service.GEMINI_API_KEY", None)
+    monkeypatch.setattr("app.services.analysis_service.GEMINI_API_KEY", None)
 
     with pytest.raises(APIException) as exc_info:
         AnalysisService()

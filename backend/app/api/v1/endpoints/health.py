@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from backend.app.models import schemas
+from app.models import schemas
 
 router = APIRouter(prefix="/api/v1", tags=["Health Check"])
 

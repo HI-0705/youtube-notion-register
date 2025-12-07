@@ -33,16 +33,16 @@ class SessionService:
     async def load_session(self, session_id: str) -> SessionInfo:
         """セッション情報をファイルから読み込み"""
         session_file_path = self._get_session_file_path(session_id)
-        if not os.path.exists(session_file_path):
+        try:
+            async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                return SessionInfo.model_validate_json(content)
+        except FileNotFoundError:
             raise APIException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 message=f"Session ID '{session_id}' not found.",
                 error_code="E007",
             )
-        try:
-            async with aiofiles.open(session_file_path, "r", encoding="utf-8") as f:
-                content = await f.read()
-                return SessionInfo.model_validate_json(content)
         except Exception as e:
             raise APIException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
