@@ -28,23 +28,20 @@ const isLoading = ref(false)
 const error = ref<string | null>(null)
 const router = useRouter()
 const mainStore = useMainStore()
+const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[\w-]{11}(&.*)?$/
 
 const startCollection = async () => {
   error.value = null
   isLoading.value = true
 
+  if (!youtubeRegex.test(youtubeUrl.value)) {
+    error.value = '有効なURLを入力してください。'
+    isLoading.value = false
+    return
+  }
+
+  console.log('入力されたURL:', youtubeUrl.value)
   try {
-    if (!youtubeUrl.value) {
-      error.value = 'YouTube URLは必須です。'
-      return
-    }
-    if (!youtubeUrl.value.startsWith('https://www.youtube.com/watch?v=')) {
-      error.value = '動画のURLを入力してください。'
-      return
-    }
-
-    console.log('入力されたURL:', youtubeUrl.value)
-
     const response = await api.collectVideoData({
       url: youtubeUrl.value,
       channel_id: channelId.value || undefined,

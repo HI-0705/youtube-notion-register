@@ -22,5 +22,8 @@ export const useMainStore = defineStore("main", {
     setAnalysisResult(result: AnalysisResult) {
       this.analysisResult = result;
     },
+    clearAnalysisResult() {
+      this.analysisResult = null;
+    },
   },
 });

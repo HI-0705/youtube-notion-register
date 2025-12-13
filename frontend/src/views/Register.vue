@@ -39,7 +39,7 @@
         </div>
       </div>
       <div class="button-group">
-        <button @click="goBack" class="secondary">戻る</button>
+        <button @click="goHome" class="secondary">ホームに戻る</button>
         <button @click="registerToNotion">登録する</button>
       </div>
     </div>
@@ -103,7 +103,7 @@ const registerToNotion = async () => {
     if (payload.status === 'success' && payload.data?.notion_url) {
       notionUrl.value = payload.data.notion_url
       mainStore.clearSessionId()
-      mainStore.setAnalysisResult({ summary: '', suggested_titles: '', categories: [], emotions: '' })
+      mainStore.clearAnalysisResult()
     } else {
       throw new Error(payload.message || '登録に失敗しました。')
     }
@@ -113,10 +113,6 @@ const registerToNotion = async () => {
   } finally {
     isLoading.value = false
   }
-}
-
-const goBack = () => {
-  router.back()
 }
 
 const goHome = () => {
@@ -131,14 +127,18 @@ const goHome = () => {
   margin: 0 auto;
 }
 
-.loading-overlay,
-.result-view,
-.confirmation-view,
-.error-message {
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(255, 255, 255, 0.8);
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: center;
-  gap: 1.5rem;
+  z-index: 1000;
 }
 
 .spinner {
@@ -148,6 +148,16 @@ const goHome = () => {
   width: 60px;
   height: 60px;
   animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
+}
+
+.result-view,
+.confirmation-view,
+.error-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
 }
 
 @keyframes spin {
