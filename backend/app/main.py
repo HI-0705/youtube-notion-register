@@ -1,14 +1,13 @@
 from fastapi import FastAPI, HTTPException
 
-from .core.logging import setup_logging, get_logger
+from .core.logging import setup_logging
 from .core.exceptions import APIException, http_exception_handler, api_exception_handler
-from .core.middleware import setup_cors_middleware, log_requests
+from .core.middleware import setup_cors_middleware, log_requests, setup_rate_limiter
 from .api.v1.endpoints import health, collect, analyze, register, session
 
 
 # ロギング設定の初期化
 setup_logging()
-logger = get_logger("app")
 
 # FastAPIインスタンス生成
 app = FastAPI(
@@ -20,6 +19,9 @@ app = FastAPI(
 # ミドルウェア設定
 app.middleware("http")(log_requests)
 setup_cors_middleware(app)
+setup_rate_limiter(app)
+
+# エラーハンドラー設定
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(APIException, api_exception_handler)
 
