@@ -28,3 +28,8 @@ def parse_duration(duration: str) -> int:
         return 0
     hours, minutes, seconds = match.groups(default="0")
     return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+
+
+# CORS設定
+_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+CORS_ORIGINS = [origin.strip() for origin in _origins_str.split(",")]
