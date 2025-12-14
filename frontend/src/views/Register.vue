@@ -13,7 +13,7 @@
       </div>
       <button @click="goHome">ホームに戻る</button>
     </div>
-    <div v-if="!isLoading && !notionUrl && !error" class="confirmation-view">
+    <div v-if="!isLoading && !notionUrl" class="confirmation-view">
       <h1>登録内容の確認</h1>
       <p>以下の内容で登録します。</p>
       <div class="confirmation-content">
@@ -43,11 +43,6 @@
         <button @click="registerToNotion">登録する</button>
       </div>
     </div>
-    <div v-if="error" class="error-message">
-      <h2>エラーが発生しました</h2>
-      <p>{{ error }}</p>
-      <button @click="goHome">ホームに戻る</button>
-    </div>
   </div>
 </template>
 
@@ -68,13 +63,13 @@ const mainStore = useMainStore()
 const router = useRouter()
 
 const isLoading = ref(false)
-const error = ref<string | null>(null)
 const notionUrl = ref<string | null>(null)
 const finalData = ref<AnalysisResult | null>(null)
 
 onMounted(() => {
   if (!mainStore.sessionId || !mainStore.analysisResult) {
-    error.value = 'セッション情報が見つかりません。'
+    mainStore.showNotification({ message: 'セッション情報が見つかりません。', type: 'error' });
+    router.push('/');
     return
   }
   finalData.value = mainStore.analysisResult
@@ -82,12 +77,11 @@ onMounted(() => {
 
 const registerToNotion = async () => {
   if (!mainStore.sessionId || !finalData.value) {
-    error.value = '登録データがありません。'
+    mainStore.showNotification({ message: '登録データがありません。', type: 'error' });
     return
   }
 
   isLoading.value = true
-  error.value = null
 
   try {
     const payload = await api.registerToNotion({
@@ -104,12 +98,14 @@ const registerToNotion = async () => {
       notionUrl.value = payload.data.notion_url
       mainStore.clearSessionId()
       mainStore.clearAnalysisResult()
+      mainStore.showNotification({ message: 'Notionへの登録が完了しました。', type: 'success' });
     } else {
-      throw new Error(payload.message || '登録に失敗しました。')
+      mainStore.showNotification({ message: payload.message || '登録に失敗しました。', type: 'error' });
     }
   } catch (err: any) {
     console.error('登録エラー:', err)
-    error.value = err.response?.data?.detail || err.message || '登録中にエラーが発生しました。'
+    const errorMessage = err.response?.data?.detail || err.message || '登録中にエラーが発生しました。';
+    mainStore.showNotification({ message: errorMessage, type: 'error' });
   } finally {
     isLoading.value = false
   }
@@ -152,8 +148,7 @@ const goHome = () => {
 }
 
 .result-view,
-.confirmation-view,
-.error-message {
+.confirmation-view {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -260,9 +255,5 @@ button:hover {
   font-weight: bold;
   color: #007bff;
   word-break: break-all;
-}
-
-.error-message {
-  color: red;
 }
 </style>

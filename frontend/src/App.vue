@@ -5,10 +5,12 @@
     <main>
       <router-view />
     </main>
+    <GlobalNotification />
   </div>
 </template>
 
 <script setup lang="ts">
+import GlobalNotification from './components/GlobalNotification.vue';
 </script>
 
 <style>

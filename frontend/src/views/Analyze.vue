@@ -40,12 +40,6 @@
 
       <button @click="goToRegister">登録内容を修正して進む</button>
     </div>
-
-    <div v-if="error" class="error-message">
-      <h2>エラーが発生しました</h2>
-      <p>{{ error }}</p>
-      <button @click="goHome">ホームに戻る</button>
-    </div>
   </div>
 </template>
 
@@ -66,7 +60,6 @@ const mainStore = useMainStore()
 const router = useRouter()
 
 const isLoading = ref(true)
-const error = ref<string | null>(null)
 const analysisResult = ref<AnalysisResult>({
   summary: '',
   suggested_titles: '',
@@ -88,7 +81,7 @@ const allEmotions = [
 onMounted(async () => {
   const sessionId = mainStore.sessionId
   if (!sessionId) {
-    error.value = 'セッションIDが見つかりません。'
+    mainStore.showNotification({ message: 'セッションIDが見つかりません。', type: 'error' });
     isLoading.value = false
     return
   }
@@ -104,13 +97,15 @@ onMounted(async () => {
         categories: response.data.categories || [],
         emotions: response.data.emotions || allEmotions[0]
       }
+      mainStore.showNotification({ message: '分析が完了しました。内容を確認してください。', type: 'success' });
       console.log('分析結果:', analysisResult.value)
     } else {
-      throw new Error(response.message || '分析に失敗しました。')
+      mainStore.showNotification({ message: response.message || '分析に失敗しました。', type: 'error' });
     }
   } catch (err: any) {
     console.error('分析エラー:', err)
-    error.value = err.response?.data?.detail || err.message || '分析中にエラーが発生しました。'
+    const errorMessage = err.response?.data?.detail || err.message || '分析中にエラーが発生しました。';
+    mainStore.showNotification({ message: errorMessage, type: 'error' });
   } finally {
     isLoading.value = false
   }
@@ -121,6 +116,9 @@ const goToRegister = () => {
   if (analysisResult.value) {
     mainStore.setAnalysisResult(analysisResult.value)
     router.push('/register')
+  } else {
+    mainStore.showNotification({ message: '分析結果がありません。ホームに戻ります。', type: 'error' });
+    router.push('/');
   }
 }
 
@@ -270,10 +268,5 @@ button {
 
 button:hover {
   background-color: #218838;
-}
-
-.error-message {
-  text-align: center;
-  color: red;
 }
 </style>
