@@ -7,8 +7,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
-# 使用するモデルの指定
-MODEL = "gemini-2.5-flash"
+MODEL = os.getenv("MODEL", "gemini-2.5-flash")
+RATE_LIMIT = os.getenv("RATE_LIMIT", "20/minute")
 
 # APIキーが設定されていない場合のガード処理
 _required = {"YOUTUBE_API_KEY": YOUTUBE_API_KEY, "GEMINI_API_KEY": GEMINI_API_KEY}
@@ -28,3 +28,8 @@ def parse_duration(duration: str) -> int:
         return 0
     hours, minutes, seconds = match.groups(default="0")
     return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+
+
+# CORS設定
+_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+CORS_ORIGINS = [origin.strip() for origin in _origins_str.split(",")]

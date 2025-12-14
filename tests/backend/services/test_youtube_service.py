@@ -1,12 +1,10 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from googleapiclient.errors import HttpError
-from pydantic import HttpUrl
-from datetime import date
 
-from backend.app.services.youtube_service import YouTubeService
-from backend.app.models.schemas import VideoMetadata
-from backend.app.core.exceptions import APIException
+from app.services.youtube_service import YouTubeService
+from app.models.schemas import VideoMetadata
+from app.core.exceptions import APIException
 
 VIDEO_ID = "dQw4w9WgXcQ"
 VALID_YOUTUBE_URL = "https://www.youtube.com/watch?v=" + VIDEO_ID
@@ -17,9 +15,7 @@ def setup_youtube_env(monkeypatch):
     """
     ダミーのAPIキーを設定
     """
-    monkeypatch.setattr(
-        "backend.app.services.youtube_service.YOUTUBE_API_KEY", "dummy_api_key"
-    )
+    monkeypatch.setattr("app.services.youtube_service.YOUTUBE_API_KEY", "dummy_api_key")
 
 
 @pytest.fixture
@@ -62,8 +58,8 @@ def mock_youtube_dependencies(dummy_youtube_video_response, dummy_transcript_res
     """
     YouTube関連の依存関係をモック化するフィクスチャ
     """
-    with patch("backend.app.services.youtube_service.build") as mock_build, patch(
-        "backend.app.services.youtube_service.YouTubeTranscriptApi"
+    with patch("app.services.youtube_service.build") as mock_build, patch(
+        "app.services.youtube_service.YouTubeTranscriptApi"
     ) as mock_transcript_api:
         mock_build.return_value.videos.return_value.list.return_value.execute.return_value = (
             dummy_youtube_video_response

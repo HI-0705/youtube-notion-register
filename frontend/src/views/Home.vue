@@ -5,14 +5,11 @@
 
     <div class="input-area">
       <input type="text" v-model="youtubeUrl" placeholder="https://www.youtube.com/watch?v=..." :disabled="isLoading" />
-      <!-- 現状は非表示にしておく -->
-      <input v-if="false" type="text" v-model="channelId" placeholder="チャンネルID (例: UC...)" :disabled="isLoading" />
       <button @click="startCollection" :disabled="isLoading">
         <span v-if="isLoading">収集中...</span>
         <span v-else>収集・字幕取得 (Collect)</span>
       </button>
     </div>
-    <p v-if="error" class="error-message">{{ error }}</p>
   </div>
 </template>
 
@@ -25,26 +22,21 @@ import { useMainStore } from '../store'
 const youtubeUrl = ref('')
 const channelId = ref('')
 const isLoading = ref(false)
-const error = ref<string | null>(null)
 const router = useRouter()
 const mainStore = useMainStore()
+const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[\w-]{11}(&.*)?$/
 
 const startCollection = async () => {
-  error.value = null
   isLoading.value = true
 
+  if (!youtubeRegex.test(youtubeUrl.value)) {
+    mainStore.showNotification({ message: '有効なURLを入力してください。', type: 'error' });
+    isLoading.value = false
+    return
+  }
+
+  console.log('入力されたURL:', youtubeUrl.value)
   try {
-    if (!youtubeUrl.value) {
-      error.value = 'YouTube URLは必須です。'
-      return
-    }
-    if (!youtubeUrl.value.startsWith('https://www.youtube.com/watch?v=')) {
-      error.value = '動画のURLを入力してください。'
-      return
-    }
-
-    console.log('入力されたURL:', youtubeUrl.value)
-
     const response = await api.collectVideoData({
       url: youtubeUrl.value,
       channel_id: channelId.value || undefined,
@@ -52,13 +44,15 @@ const startCollection = async () => {
 
     if (response.status === 'success' && response.session_id) {
       mainStore.setSessionId(response.session_id)
+      mainStore.showNotification({ message: '動画データの収集と字幕取得が完了しました。', type: 'success' });
       router.push('/analyze')
     } else {
-      error.value = response.message || '動画データの収集に失敗しました。'
+      mainStore.showNotification({ message: response.message || '動画データの収集に失敗しました。', type: 'error' });
     }
   } catch (err: any) {
     console.error('動画データ収集エラー:', err)
-    error.value = err.response?.data?.detail || '動画データの収集中にエラーが発生しました。'
+    const errorMessage = err.response?.data?.detail || '動画データの収集中にエラーが発生しました。';
+    mainStore.showNotification({ message: errorMessage, type: 'error' });
   } finally {
     isLoading.value = false
   }
@@ -107,11 +101,5 @@ button:hover:not(:disabled) {
 button:disabled {
   background-color: #cccccc;
   cursor: not-allowed;
-}
-
-.error-message {
-  color: red;
-  margin-top: 1rem;
-  font-weight: bold;
 }
 </style>

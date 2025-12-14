@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends
 
-from backend.app.models import schemas
-from backend.app.api.v1 import deps
-from backend.app.services.session_service import SessionService
-from backend.app.services.notion_service import NotionService
-from backend.app.core.logging import get_logger
+from app.models import schemas
+from app.api.v1 import deps
+from app.services.session_service import SessionService
+from app.services.notion_service import NotionService
+from app.core.logging import get_logger
 
 router = APIRouter(prefix="/api/v1", tags=["Video Processing"])
 logger = get_logger(__name__)

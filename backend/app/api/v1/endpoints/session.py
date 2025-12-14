@@ -2,11 +2,11 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, status
 
-from backend.app.models import schemas
-from backend.app.api.v1 import deps
-from backend.app.services.session_service import SessionService
-from backend.app.core.exceptions import APIException
-from backend.app.core.logging import get_logger
+from app.models import schemas
+from app.api.v1 import deps
+from app.services.session_service import SessionService
+from app.core.exceptions import APIException
+from app.core.logging import get_logger
 
 router = APIRouter(prefix="/api/v1", tags=["Session Management"])
 logger = get_logger(__name__)

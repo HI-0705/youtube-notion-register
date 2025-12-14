@@ -5,9 +5,9 @@ from pydantic import HttpUrl
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock
 
-from backend.app.main import app
-from backend.app.models import schemas
-from backend.app.api.v1 import deps
+from app.main import app
+from app.models import schemas
+from app.api.v1 import deps
 
 client = TestClient(app)
 

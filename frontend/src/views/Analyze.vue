@@ -5,7 +5,7 @@
       <p>分析中...</p>
     </div>
 
-    <div v-if="!isLoading && analysisResult" class="analyze-content">
+    <div v-if="!isLoading" class="analyze-content">
       <h1>分析結果</h1>
       <p>分析結果です。必要に応じて内容を修正してください。</p>
 
@@ -22,24 +22,23 @@
       <div class="form-group">
         <label for="categories">カテゴリ</label>
         <div class="categories-chips">
-          <span v-for="cat in analysisResult.categories" :key="cat" class="chip">{{ cat }}</span>
+          <span v-for="cat in allCategories" :key="cat" class="chip"
+            :class="{ 'chip-selected': isCategorySelected(cat) }" @click="toggleCategory(cat)">
+            {{ cat }}
+          </span>
         </div>
       </div>
 
       <div class="form-group">
         <label for="emotions">感情</label>
-        <div class="emotions-chips">
-          <span class="chip">{{ analysisResult.emotions }}</span>
-        </div>
+        <select id="emotions" v-model="analysisResult.emotions">
+          <option v-for="emotion in allEmotions" :key="emotion" :value="emotion">
+            {{ emotion }}
+          </option>
+        </select>
       </div>
 
       <button @click="goToRegister">登録内容を修正して進む</button>
-    </div>
-
-    <div v-if="error" class="error-message">
-      <h2>エラーが発生しました</h2>
-      <p>{{ error }}</p>
-      <button @click="goHome">ホームに戻る</button>
     </div>
   </div>
 </template>
@@ -61,14 +60,28 @@ const mainStore = useMainStore()
 const router = useRouter()
 
 const isLoading = ref(true)
-const error = ref<string | null>(null)
-const analysisResult = ref<AnalysisResult | null>(null)
+const analysisResult = ref<AnalysisResult>({
+  summary: '',
+  suggested_titles: '',
+  categories: [],
+  emotions: ''
+})
+
+const allCategories = [
+  "音楽", "動物", "スポーツ", "旅行", "ゲーム", "コメディ",
+  "エンターテインメント", "教育", "科学", "映画", "アニメ",
+  "クラシック", "ドキュメンタリー", "ドラマ", "ショートムービー", "その他"
+]
+
+const allEmotions = [
+  "感動", "愉快", "驚愕", "啓発", "考察", "癒着", "その他"
+]
 
 // 分析
 onMounted(async () => {
   const sessionId = mainStore.sessionId
   if (!sessionId) {
-    error.value = 'セッションIDが見つかりません。'
+    mainStore.showNotification({ message: 'セッションIDが見つかりません。', type: 'error' });
     isLoading.value = false
     return
   }
@@ -78,14 +91,21 @@ onMounted(async () => {
     const response = await api.analyzeTranscript({ session_id: sessionId })
 
     if (response.status === 'success' && response.data) {
-      analysisResult.value = response.data
+      analysisResult.value = {
+        ...analysisResult.value,
+        ...response.data,
+        categories: response.data.categories || [],
+        emotions: response.data.emotions || allEmotions[0]
+      }
+      mainStore.showNotification({ message: '分析が完了しました。内容を確認してください。', type: 'success' });
       console.log('分析結果:', analysisResult.value)
     } else {
-      throw new Error(response.message || '分析に失敗しました。')
+      mainStore.showNotification({ message: response.message || '分析に失敗しました。', type: 'error' });
     }
   } catch (err: any) {
     console.error('分析エラー:', err)
-    error.value = err.response?.data?.detail || err.message || '分析中にエラーが発生しました。'
+    const errorMessage = err.response?.data?.detail || err.message || '分析中にエラーが発生しました。';
+    mainStore.showNotification({ message: errorMessage, type: 'error' });
   } finally {
     isLoading.value = false
   }
@@ -96,12 +116,30 @@ const goToRegister = () => {
   if (analysisResult.value) {
     mainStore.setAnalysisResult(analysisResult.value)
     router.push('/register')
+  } else {
+    mainStore.showNotification({ message: '分析結果がありません。ホームに戻ります。', type: 'error' });
+    router.push('/');
   }
 }
 
 const goHome = () => {
   router.push('/')
 }
+
+const toggleCategory = (category: string) => {
+  if (!analysisResult.value) return;
+
+  const index = analysisResult.value.categories.indexOf(category);
+  if (index > -1) {
+    analysisResult.value.categories.splice(index, 1);
+  } else {
+    analysisResult.value.categories.push(category);
+  }
+};
+
+const isCategorySelected = (category: string): boolean => {
+  return analysisResult.value?.categories.includes(category);
+};
 </script>
 
 <style scoped>
@@ -192,6 +230,28 @@ textarea {
   padding: 0.5rem 1rem;
   border-radius: 16px;
   font-size: 0.9rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+
+.chip:hover {
+  background-color: #d0d0d0;
+}
+
+.chip-selected {
+  background-color: #007bff;
+  color: white;
+}
+
+select {
+  padding: 0.75rem;
+  font-size: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  background-color: white;
 }
 
 button {
@@ -208,10 +268,5 @@ button {
 
 button:hover {
   background-color: #218838;
-}
-
-.error-message {
-  text-align: center;
-  color: red;
 }
 </style>

@@ -13,7 +13,7 @@
       </div>
       <button @click="goHome">ホームに戻る</button>
     </div>
-    <div v-if="!isLoading && !notionUrl && !error" class="confirmation-view">
+    <div v-if="!isLoading && !notionUrl" class="confirmation-view">
       <h1>登録内容の確認</h1>
       <p>以下の内容で登録します。</p>
       <div class="confirmation-content">
@@ -39,14 +39,9 @@
         </div>
       </div>
       <div class="button-group">
-        <button @click="goBack" class="secondary">戻る</button>
+        <button @click="goHome" class="secondary">ホームに戻る</button>
         <button @click="registerToNotion">登録する</button>
       </div>
-    </div>
-    <div v-if="error" class="error-message">
-      <h2>エラーが発生しました</h2>
-      <p>{{ error }}</p>
-      <button @click="goHome">ホームに戻る</button>
     </div>
   </div>
 </template>
@@ -68,13 +63,13 @@ const mainStore = useMainStore()
 const router = useRouter()
 
 const isLoading = ref(false)
-const error = ref<string | null>(null)
 const notionUrl = ref<string | null>(null)
 const finalData = ref<AnalysisResult | null>(null)
 
 onMounted(() => {
   if (!mainStore.sessionId || !mainStore.analysisResult) {
-    error.value = 'セッション情報が見つかりません。'
+    mainStore.showNotification({ message: 'セッション情報が見つかりません。', type: 'error' });
+    router.push('/');
     return
   }
   finalData.value = mainStore.analysisResult
@@ -82,12 +77,11 @@ onMounted(() => {
 
 const registerToNotion = async () => {
   if (!mainStore.sessionId || !finalData.value) {
-    error.value = '登録データがありません。'
+    mainStore.showNotification({ message: '登録データがありません。', type: 'error' });
     return
   }
 
   isLoading.value = true
-  error.value = null
 
   try {
     const payload = await api.registerToNotion({
@@ -103,20 +97,18 @@ const registerToNotion = async () => {
     if (payload.status === 'success' && payload.data?.notion_url) {
       notionUrl.value = payload.data.notion_url
       mainStore.clearSessionId()
-      mainStore.setAnalysisResult({ summary: '', suggested_titles: '', categories: [], emotions: '' })
+      mainStore.clearAnalysisResult()
+      mainStore.showNotification({ message: 'Notionへの登録が完了しました。', type: 'success' });
     } else {
-      throw new Error(payload.message || '登録に失敗しました。')
+      mainStore.showNotification({ message: payload.message || '登録に失敗しました。', type: 'error' });
     }
   } catch (err: any) {
     console.error('登録エラー:', err)
-    error.value = err.response?.data?.detail || err.message || '登録中にエラーが発生しました。'
+    const errorMessage = err.response?.data?.detail || err.message || '登録中にエラーが発生しました。';
+    mainStore.showNotification({ message: errorMessage, type: 'error' });
   } finally {
     isLoading.value = false
   }
-}
-
-const goBack = () => {
-  router.back()
 }
 
 const goHome = () => {
@@ -131,14 +123,18 @@ const goHome = () => {
   margin: 0 auto;
 }
 
-.loading-overlay,
-.result-view,
-.confirmation-view,
-.error-message {
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(255, 255, 255, 0.8);
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: center;
-  gap: 1.5rem;
+  z-index: 1000;
 }
 
 .spinner {
@@ -148,6 +144,15 @@ const goHome = () => {
   width: 60px;
   height: 60px;
   animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
+}
+
+.result-view,
+.confirmation-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
 }
 
 @keyframes spin {
@@ -250,9 +255,5 @@ button:hover {
   font-weight: bold;
   color: #007bff;
   word-break: break-all;
-}
-
-.error-message {
-  color: red;
 }
 </style>
